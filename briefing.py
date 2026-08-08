@@ -4,7 +4,8 @@ briefing.py
 Generates a plain-language "Daily Space Operations Briefing" by combining
 real-time NASA data (DONKI, NeoWs, EONET) with significance classification
 grounded in real NOAA/NASA operational thresholds, topped with an
-AI-generated narrative summary from IBM watsonx.ai (Granite).
+AI-generated narrative from IBM watsonx.ai (Granite), anomaly alerts,
+mission window assessments, and spacecraft health forecasts.
 
 Usage:
     python briefing.py
@@ -31,7 +32,10 @@ from significance import (
     summarize_satellite_catalog,
     summarize_deep_space_objects,
     get_lunar_debris_summary,
+    detect_alerts,
 )
+from mission_planner import assess_mission_windows, format_mission_windows
+from spacecraft_health import score_spacecraft, format_spacecraft_health
 from watsonx import generate_narrative
 
 
@@ -148,6 +152,72 @@ def build_satellite_section():
     return "\n".join(lines)
 
 
+def build_mission_window_section():
+    """
+    Extract the worst flare and peak Kp from the current data and assess
+    mission windows. Worst-case flare defaults to 'C0' (benign) if none recorded.
+    """
+    flares = fetch_solar_flares(days_back=7)
+    storms = fetch_geomagnetic_storms(days_back=7)
+    neos   = fetch_near_earth_objects(days_forward=7)
+
+    # Determine worst flare class
+    worst_flare = "C0"
+    if flares:
+        rank = {"A": 0, "B": 0, "C": 1, "M": 2, "X": 3}
+        worst_flare = max(
+            (f.get("classType", "C0") for f in flares),
+            key=lambda c: (rank.get(c[0].upper(), 0), float(c[1:] or 0))
+        )
+
+    # Determine peak Kp
+    peak_kp = 0.0
+    for storm in storms:
+        for entry in storm.get("allKpIndex", []):
+            peak_kp = max(peak_kp, float(entry.get("kpIndex", 0)))
+
+    # Determine closest NEO tier
+    neo_tier = "Routine"
+    if neos:
+        from significance import classify_close_approach
+        best_ld = float("inf")
+        for neo in neos:
+            approaches = neo.get("close_approach_data", [])
+            if approaches:
+                km = float(approaches[0]["miss_distance"]["kilometers"])
+                r  = classify_close_approach(km)
+                if r["distance_ld"] < best_ld:
+                    best_ld  = r["distance_ld"]
+                    neo_tier = r["tier"]
+
+    windows = assess_mission_windows(worst_flare, peak_kp, neo_tier)
+    return format_mission_windows(windows)
+
+
+def build_spacecraft_health_section():
+    """
+    Compute spacecraft risk scores from current worst-case flare and peak Kp.
+    """
+    flares = fetch_solar_flares(days_back=7)
+    storms = fetch_geomagnetic_storms(days_back=7)
+
+    worst_flare = "C0"
+    if flares:
+        rank = {"A": 0, "B": 0, "C": 1, "M": 2, "X": 3}
+        worst_flare = max(
+            (f.get("classType", "C0") for f in flares),
+            key=lambda c: (rank.get(c[0].upper(), 0), float(c[1:] or 0))
+        )
+
+    peak_kp = 0.0
+    for storm in storms:
+        for entry in storm.get("allKpIndex", []):
+            peak_kp = max(peak_kp, float(entry.get("kpIndex", 0)))
+
+    scores = score_spacecraft(worst_flare, peak_kp)
+    return format_spacecraft_health(scores)
+
+
 def build_deep_space_section():
     objects = fetch_all_deep_space_objects()
     return summarize_deep_space_objects(objects)
@@ -178,25 +248,46 @@ def main():
     print(generate_briefing())
 
 
+def build_alert_banner(alerts: list) -> str:
+    """
+    Format active alerts into a prominent banner for the top of the briefing.
+    Returns an empty string if there are no alerts (all-clear conditions).
+    """
+    if not alerts:
+        return "OPERATIONAL STATUS: ✅ ALL CLEAR — No threshold-crossing conditions detected."
+    lines = [f"⚠  OPERATIONAL ALERTS ({len(alerts)} active) ⚠"]
+    for alert in alerts:
+        lines.append(f"  • {alert}")
+    return "\n".join(lines)
+
+
 def generate_briefing():
     today = date.today().isoformat()
 
     # Build each data section independently
     section_map = {
-        "solar_flares":  build_flare_section(),
-        "geomagnetic":   build_geomagnetic_section(),
-        "neo":           build_neo_section(),
-        "earth_events":  build_eonet_section(),
-        "satellites":    build_satellite_section(),
-        "deep_space":    build_deep_space_section(),
-        "lunar_debris":  build_lunar_debris_section(),
+        "solar_flares":     build_flare_section(),
+        "geomagnetic":      build_geomagnetic_section(),
+        "neo":              build_neo_section(),
+        "earth_events":     build_eonet_section(),
+        "satellites":       build_satellite_section(),
+        "deep_space":       build_deep_space_section(),
+        "lunar_debris":     build_lunar_debris_section(),
+        "mission_windows":  build_mission_window_section(),
+        "spacecraft_health":build_spacecraft_health_section(),
     }
 
-    # Ask IBM Granite to narrate the day's conditions
-    ai_narrative = generate_narrative(section_map)
+    # Detect threshold-crossing conditions
+    alerts = detect_alerts(section_map)
+    alert_banner = build_alert_banner(alerts)
+
+    # Ask IBM Granite to narrate the day's conditions with alert context
+    ai_narrative = generate_narrative(section_map, active_alerts=alerts)
 
     sections = [
         f"=== DAILY SPACE OPERATIONS BRIEFING — {today} ===\n",
+        alert_banner,
+        "",
         ai_narrative,
         "",
         "--- DETAILED DATA ---",
@@ -210,6 +301,10 @@ def generate_briefing():
         section_map["earth_events"],
         "",
         section_map["satellites"],
+        "",
+        section_map["spacecraft_health"],
+        "",
+        section_map["mission_windows"],
         "",
         section_map["deep_space"],
         "",

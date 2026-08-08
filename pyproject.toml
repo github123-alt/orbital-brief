@@ -23,4 +23,4 @@ Homepage = "https://github.com/your-username/orbital-brief"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["briefing*", "nasa_api*", "significance*"]
+include = ["briefing*", "nasa_api*", "significance*", "mission_planner*", "spacecraft_health*", "watsonx*", "ask*"]

@@ -18,12 +18,15 @@ morning brief that is always current, no matter when you run it.
 
 | Section | Data Source | Live? | What it tells you |
 |---|---|---|---|
-| **AI Narrative** | IBM watsonx.ai (Granite) | ✅ Live | Plain-English summary of the day's space conditions, generated fresh each run |
+| **Anomaly Alerts** | Derived from live data | ✅ Live | Threshold-crossing conditions flagged instantly (R3+, G3+, PHA approach, debris surge) |
+| **AI Flight Director** | IBM watsonx.ai (Granite) | ✅ Live | Operator-focused narrative with threat level, specific risks, and recommended actions |
 | **Solar Flares** | NASA DONKI | ✅ Live | Last 7 days of flares, classified by NOAA R-scale (radio blackout impact) |
 | **Geomagnetic Storms** | NASA DONKI | ✅ Live | Last 7 days of storms, classified by NOAA G-scale (Kp index) |
 | **Near-Earth Objects** | NASA NeoWs | ✅ Live | Next 7 days of asteroid close approaches, flagged by lunar distance & PHA criteria |
 | **Earth Events (from orbit)** | NASA EONET | ✅ Live | Currently open natural events (wildfires, storms, volcanoes) tracked from orbit |
 | **Satellites** | CelesTrak | ✅ Live | Active satellite count by orbit type (LEO/MEO/GEO/HEO) + recently re-entered objects |
+| **Spacecraft Health Forecast** | Derived from live data | ✅ Live | Predictive risk score (0–100) per orbit regime: LEO, MEO, GEO, HEO |
+| **Mission Window Assessment** | Derived from live data | ✅ Live | GO / CAUTION / HOLD for EVA, launch, orbital maneuver, deep-space uplink, calibration |
 | **Deep-Space Objects & Telescopes** | JPL Horizons | ✅ Live | Real-time heliocentric distances for Voyager 1 & 2, New Horizons, Hubble, Webb, and more |
 | **Lunar Debris Inventory** | NASA/ESA mission records | 📋 Static | All 38 confirmed human-made objects on or impacted into the Moon, with mass and fate |
 
@@ -37,12 +40,17 @@ not arbitrary cutoffs.
 ```
 === DAILY SPACE OPERATIONS BRIEFING — 2025-08-08 ===
 
-AI SUMMARY (IBM Granite): Today's space environment is moderately active. A strong
-X1.2-class solar flare caused wide-area HF radio blackouts on the sunlit side of Earth,
-and a follow-on G2 geomagnetic storm may affect high-latitude power systems and satellite
-attitude control. Eighteen near-Earth objects are tracked this week; asteroid 2025 NA3
-passes at 3.4 lunar distances with no impact risk. Voyager 1 continues its journey
-through interstellar space at 171.4 AU — over 25 billion kilometres from our Sun.
+⚠  OPERATIONAL ALERTS (2 active) ⚠
+  • STRONG solar flare (R3) — wide-area HF radio blackout likely; GPS accuracy may be degraded
+  • Very close PHA-range asteroid approach — within 5 LD and meets size criteria; elevated monitoring recommended
+
+AI FLIGHT DIRECTOR BRIEFING (IBM Granite):
+THREAT LEVEL: ELEVATED. An X1.2-class solar flare (R3/Strong) produced a wide-area HF
+radio blackout and GPS degradation; switch ground stations to backup channels. A G2
+geomagnetic storm (Kp=6.7) is ongoing — monitor high-latitude power systems and satellite
+attitude control. Asteroid 2025 NA3 passes at 3.4 LD; no impact risk but trajectory
+confirmation advised. RECOMMENDED ACTIONS: (1) Delay EVA until flare activity subsides.
+(2) Verify collision avoidance buffers for LEO assets.
 
 --- DETAILED DATA ---
 
@@ -53,38 +61,57 @@ GEOMAGNETIC ACTIVITY: 2 storm(s) recorded in the past 7 days.
   Storm starting 2025-08-07T02:00Z: peak Kp=6.7 — G2 (Moderate).
 
 NEAR-EARTH OBJECTS: 18 object(s) tracked with close approaches in the coming week.
-  Closest approach: (2025 NA3) — Very close. Passes within 3.4 lunar distances.
+  Closest approach: (2025 NA3) — Very close (within PHA monitoring range). 3.4 lunar distances.
 
 EARTH EVENTS (from orbit): Currently tracking: 14 active wildfires, 3 active severe storms.
 
-SATELLITES: 1,656 active satellites in orbit (1,609 in LEO, 14 in MEO, 24 in GEO, 9 in HEO).
-  275 object(s) recently re-entered the atmosphere.
+SATELLITES: 1,656 active satellites (1,609 LEO, 14 MEO, 24 GEO, 9 HEO). 275 re-entered recently.
   Recently re-entered: STARLINK-37886, STARLINK-37937, STARLINK-37903
 
-DEEP-SPACE OBJECTS & TELESCOPES: 11 tracked object(s) beyond Earth orbit.
-  ★ INTERSTELLAR (beyond heliopause ~120 AU):
-    Voyager 1  — 171.4 AU from Sun (25.64 billion km)  Farthest human-made object ever; still transmitting
-    Voyager 2  — 143.6 AU from Sun (21.48 billion km)  In interstellar space since Nov 2018; still transmitting
-    Pioneer 10 — 141.6 AU from Sun (21.18 billion km)  Last contact Jan 2003
-  Deep-space probes (within heliosphere):
-    Pioneer 11   — 117.60 AU  |  Heading toward constellation Aquila; last contact Nov 1995
-    New Horizons —  65.29 AU  |  In the Kuiper Belt; flew past Pluto 2015 & Arrokoth 2019
-    Ulysses      —   1.45 AU  |  ESA/NASA solar orbiter; retired Jun 2009
-  Space telescopes:
-    Hubble Space Telescope      — 1.0141 AU  |  LEO ~547 km; launched 1990; still operational
-    James Webb Space Telescope  — 1.0229 AU  |  At L2 ~1.5M km from Earth; launched Dec 2021
-    Spitzer Space Telescope     — 1.0028 AU  |  Retired Jan 2020; Earth-trailing heliocentric orbit
-    Kepler / K2                 — 1.0249 AU  |  Retired Oct 2018; discovered 2,600+ exoplanets
-  Escaped rocket bodies:
-    Chang'e 5-T1 booster  |  Impacted Moon Mar 2022 — no longer in space
+SPACECRAFT HEALTH FORECAST (risk by orbit regime, 0–100):
+  🟠 LEO:  56/100 — MODERATE  |  Increase telemetry monitoring frequency.
+       Primary risk: Radiation Dose
+  🔴 MEO:  61/100 — HIGH      |  Consider protective mode for sensitive instruments.
+       Primary risk: Radiation Dose
+  🟠 GEO:  58/100 — MODERATE  |  Increase telemetry monitoring frequency.
+       Primary risk: Comms Integrity
+  🟠 HEO:  57/100 — MODERATE  |  Increase telemetry monitoring frequency.
+       Primary risk: Single Event Upset
 
-LUNAR DEBRIS INVENTORY: 38 known human-made objects on or impacted into the Moon,
-  totalling ~105,355 kg (~105 metric tonnes).
-  24 impact(s) (~86,838 kg) | 14 objects still on surface (~18,517 kg)
-  Heaviest: Apollo S-IVB stages (~13,930 kg each — 5 intentionally impacted for seismic data)
-  Most recent: SLIM lander (JAXA, Jan 2024)
-  NOTE: The Mar 2022 lunar impact was initially misreported as SpaceX Falcon 9 —
-        confirmed as China's Chang'e 5-T1 booster. No SpaceX rocket has hit the Moon.
+MISSION WINDOW ASSESSMENT (today's operational recommendations):
+  🛑 EVA (Spacewalk): HOLD
+       → X-class flare — elevated radiation dose risk for crew outside ISS
+  ⚠️  Satellite Launch: CAUTION
+       → R3/R4 flare — HF comms degraded; use backup telemetry
+  ✅ Orbital Maneuver: GO
+  🛑 Deep-Space Uplink: HOLD
+       → R3+ flare — HF/S-band blackout on sunlit hemisphere; DSN window lost
+  🛑 Instrument Calibration: HOLD
+       → X-class flare — elevated particle flux contaminates calibration baseline
+
+DEEP-SPACE OBJECTS & TELESCOPES: 11 tracked object(s) beyond Earth orbit.
+  ★ INTERSTELLAR:
+    Voyager 1  — 171.4 AU (25.64 billion km) — farthest human-made object; still transmitting
+    Voyager 2  — 143.6 AU (21.48 billion km) — in interstellar space since Nov 2018
+    Pioneer 10 — 141.6 AU (21.18 billion km) — last contact Jan 2003
+  Deep-space probes: Pioneer 11 (117.6 AU), New Horizons (65.3 AU), Ulysses (1.45 AU)
+  Space telescopes: Hubble (1.014 AU, operational), Webb (1.023 AU, L2), Spitzer, Kepler
+
+LUNAR DEBRIS: 38 objects, ~105 metric tonnes on/impacted into the Moon.
+  Most recent: SLIM lander (JAXA, Jan 2024) | Heaviest: Apollo S-IVB ~13,930 kg each
+  NOTE: Mar 2022 lunar impact = Chang'e 5-T1 booster (CNSA), not SpaceX Falcon 9.
+
+--- ON A QUIET DAY ---
+
+OPERATIONAL STATUS: ✅ ALL CLEAR — No threshold-crossing conditions detected.
+
+SPACECRAFT HEALTH FORECAST:
+  🟢 LEO: 5/100 — NOMINAL | 🟢 MEO: 4/100 — NOMINAL
+  🟢 GEO: 4/100 — NOMINAL | 🟢 HEO: 4/100 — NOMINAL
+
+MISSION WINDOW ASSESSMENT:
+  ✅ EVA (Spacewalk): GO  ✅ Satellite Launch: GO  ✅ Orbital Maneuver: GO
+  ✅ Deep-Space Uplink: GO  ✅ Instrument Calibration: GO
 ```
 
 See [`sample_output.txt`](sample_output.txt) for the complete untruncated example.
@@ -193,13 +220,31 @@ python briefing.py | mail -s "Daily Space Brief" you@example.com
 
 ```
 orbital-brief/
-├── briefing.py        # Entry point — assembles and prints the full daily briefing
-├── nasa_api.py        # All API clients: DONKI, NeoWs, EONET, CelesTrak, JPL Horizons
-├── significance.py    # Classifiers + static inventories (R/G-scale, PHA, lunar debris)
-├── watsonx.py         # IBM watsonx.ai Granite integration (AI narrative summary)
-├── sample_output.txt  # Example briefing output (no API key needed to view)
-└── pyproject.toml     # Package metadata and dependencies
+├── briefing.py           # Entry point — full daily briefing
+├── nasa_api.py           # All API clients: DONKI, NeoWs, EONET, CelesTrak, JPL Horizons
+├── significance.py       # Classifiers + alert detection + static inventories
+├── mission_planner.py    # Mission window advisor: GO/CAUTION/HOLD per operation type
+├── spacecraft_health.py  # Predictive spacecraft risk scoring per orbit regime (0–100)
+├── watsonx.py            # IBM watsonx.ai Granite — flight director AI narrative
+├── ask.py                # "Ask the Flight Director" — natural language Q&A interface
+├── sample_output.txt     # Example briefing output (no API key needed to view)
+└── pyproject.toml        # Package metadata and dependencies
 ```
+
+### ask.py — Natural Language Interface
+
+Ask any space question in plain English and get a grounded, data-backed answer:
+
+```bash
+python ask.py "Is it safe to do a spacewalk today?"
+python ask.py "What is Voyager 1 doing right now?"
+python ask.py "Are there any dangerous asteroids this week?"
+python ask.py "How much human trash is on the Moon?"
+python ask.py "Why might aurora be visible tonight?"
+```
+
+Granite answers **only from data fetched seconds ago** — it cannot hallucinate
+outdated facts because the context is rebuilt live on every invocation.
 
 ---
 

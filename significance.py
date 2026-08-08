@@ -456,6 +456,75 @@ def get_lunar_debris_summary() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Anomaly & Alert Detection
+# ---------------------------------------------------------------------------
+
+def detect_alerts(section_map: dict) -> list:
+    """
+    Scan all briefing sections for conditions that cross operational thresholds
+    and return a list of plain-English alert strings.
+
+    These alerts are passed to the AI narrative so Granite focuses on what
+    actually needs attention, not just routine conditions.
+
+    Alert thresholds used:
+      - Solar flare  >= X class  (R3+ / Strong or worse)
+      - Geomagnetic  >= G3       (Kp >= 7 — satellite charging risk)
+      - NEO          <= 5 LD     (very close approach)
+      - NEO          is PHA range AND very close
+      - Satellites   >= 50 re-entries in last 30 days (unusual debris activity)
+
+    Args:
+        section_map (dict): the same dict passed to generate_briefing() —
+            keys are section names, values are pre-built text strings.
+
+    Returns:
+        list of str — one alert per triggered threshold, empty if all clear.
+    """
+    alerts = []
+    text = " ".join(section_map.values()).upper()
+
+    # ── Solar flare severity ───────────────────────────────────────────────
+    # R3 = "Strong" or worse = X-class flare
+    if "R5" in text or "(EXTREME)" in text:
+        alerts.append("EXTREME solar flare detected (R5) — complete HF blackout on sunlit hemisphere; emergency comms may be affected")
+    elif "R4" in text or "(SEVERE)" in text:
+        alerts.append("SEVERE solar flare (R4) — widespread HF radio blackout; satellite operators should check radiation dose monitors")
+    elif "R3" in text or "(STRONG)" in text:
+        alerts.append("STRONG solar flare (R3) — wide-area HF radio blackout likely; GPS accuracy may be degraded")
+
+    # ── Geomagnetic storm severity ─────────────────────────────────────────
+    if "G5" in text:
+        alerts.append("EXTREME geomagnetic storm (G5) — grid collapse risk; all satellites in LEO should enter safe mode")
+    elif "G4" in text:
+        alerts.append("SEVERE geomagnetic storm (G4) — widespread voltage control issues; surface charging on spacecraft likely")
+    elif "G3" in text:
+        alerts.append("STRONG geomagnetic storm (G3) — satellite drag increase in LEO; attitude control anomalies possible")
+
+    # ── Near-Earth Object proximity ────────────────────────────────────────
+    neo_text = section_map.get("neo", "")
+    if "EXTREMELY CLOSE" in neo_text.upper():
+        alerts.append("EXTREMELY CLOSE asteroid approach (< 1 lunar distance) — rare event; confirm with NASA JPL close-approach table")
+    elif "VERY CLOSE" in neo_text.upper() and "POTENTIALLY-HAZARDOUS" in neo_text.upper():
+        alerts.append("Very close PHA-range asteroid approach — within 5 LD and meets size criteria; elevated monitoring recommended")
+    elif "VERY CLOSE" in neo_text.upper():
+        alerts.append("Very close asteroid approach (1–5 lunar distances) — within enhanced monitoring range")
+
+    # ── Satellite re-entry rate ────────────────────────────────────────────
+    sat_text = section_map.get("satellites", "")
+    for word in sat_text.split():
+        try:
+            count = int(word.replace(",", ""))
+            if count >= 100:
+                alerts.append(f"{count} objects re-entered atmosphere in last 30 days — elevated debris activity; check collision avoidance for LEO assets")
+                break
+        except ValueError:
+            continue
+
+    return alerts
+
+
+# ---------------------------------------------------------------------------
 # Manual test block
 # ---------------------------------------------------------------------------
 

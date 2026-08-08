@@ -1,24 +1,49 @@
-=== DAILY SPACE OPERATIONS BRIEFING — 2025-08-01 ===
+=== DAILY SPACE OPERATIONS BRIEFING — 2025-08-08 ===
 
-AI SUMMARY (IBM Granite): Today's space environment is moderately active. A strong X1.2-class solar flare on July 29th caused wide-area HF radio blackouts on the sunlit side of Earth, and a follow-on geomagnetic storm reached G2 (Moderate) levels — satellite operators at high latitudes should review attitude control logs. Eighteen near-Earth objects are being tracked this week, with asteroid 2025 NA3 making a notably close pass at 3.4 lunar distances; no impact risk is indicated. On Earth, 14 active wildfires and 3 severe storm systems are currently being monitored from orbit. The global satellite fleet stands at 9,947 active spacecraft, with 3 objects having re-entered the atmosphere in recent days.
+⚠  OPERATIONAL ALERTS (2 active) ⚠
+  • STRONG solar flare (R3) — wide-area HF radio blackout likely; GPS accuracy may be degraded
+  • Very close PHA-range asteroid approach — within 5 LD and meets size criteria; elevated monitoring recommended
+
+AI FLIGHT DIRECTOR BRIEFING (IBM Granite):
+THREAT LEVEL: ELEVATED. An X1.2-class solar flare (R3/Strong) on Aug 6 produced a wide-area HF radio blackout on the sunlit hemisphere and GPS signal degradation; ground stations relying on HF comms should switch to backup channels. A G2 geomagnetic storm peaking at Kp=6.7 is ongoing — high-latitude power systems and satellite attitude control systems should be monitored closely. Asteroid 2025 NA3 passes at 3.4 lunar distances this week and meets PHA size criteria; no impact risk is indicated but trajectory confirmation is advised. RECOMMENDED ACTIONS: (1) Delay any EVA until flare activity subsides below M-class. (2) Verify collision avoidance buffers for LEO assets given elevated atmospheric drag.
 
 --- DETAILED DATA ---
 
 SOLAR FLARES: 5 flare(s) recorded in the past 7 days.
-  Most significant: X1.2 class flare on 2025-07-29T08:14Z — R3 (Strong). Wide-area HF radio blackout likely for about an hour.
+  Most significant: X1.2 class flare on 2025-08-06T08:14Z — R3 (Strong). Wide-area HF radio blackout likely for about an hour.
 
 GEOMAGNETIC ACTIVITY: 2 storm(s) recorded in the past 7 days.
-  Storm starting 2025-07-28T18:00Z: peak Kp=5.3 — G1 (Minor). Minor geomagnetic storm. Weak power grid fluctuations possible; aurora visible at high latitudes.
-  Storm starting 2025-07-30T02:00Z: peak Kp=6.7 — G2 (Moderate). Moderate geomagnetic storm. High-latitude power systems may see voltage alarms.
+  Storm starting 2025-08-07T02:00Z: peak Kp=6.7 — G2 (Moderate). High-latitude power systems may see voltage alarms.
 
 NEAR-EARTH OBJECTS: 18 object(s) tracked with close approaches in the coming week.
   Closest approach: (2025 NA3) — Very close (within potentially-hazardous monitoring range). Passes within 3.4 lunar distances — a close approach worth tracking.
 
 EARTH EVENTS (from orbit): Currently tracking: 14 active wildfires, 3 active severe storms, 1 active volcanoes.
 
-SATELLITES: 9,947 active satellites in orbit (8,112 in LEO, 612 in MEO, 573 in GEO, 650 in HEO). 3 object(s) recently re-entered the atmosphere.
-  Orbit breakdown: 8,112 LEO, 612 MEO, 573 GEO, 650 HEO
-  Recently re-entered: COSMOS 2361, SL-8 R/B, STARLINK-1234
+SATELLITES: 1,656 active satellites in orbit (1,609 in LEO, 14 in MEO, 24 in GEO, 9 in HEO). 275 object(s) recently re-entered the atmosphere.
+  Orbit breakdown: 1609 LEO, 14 MEO, 24 GEO, 9 HEO
+  Recently re-entered: STARLINK-37886, STARLINK-37937, STARLINK-37903
+
+SPACECRAFT HEALTH FORECAST (risk by orbit regime, 0–100):
+  🟠 LEO:  56/100 — MODERATE  |  Elevated conditions. Increase telemetry monitoring frequency.
+       Primary risk: Radiation Dose (score: 13)
+  🔴 MEO:  61/100 — HIGH  |  Significant risk. Consider protective mode for sensitive instruments.
+       Primary risk: Radiation Dose (score: 14)
+  🟠 GEO:  58/100 — MODERATE  |  Elevated conditions. Increase telemetry monitoring frequency.
+       Primary risk: Comms Integrity (score: 13)
+  🟠 HEO:  57/100 — MODERATE  |  Elevated conditions. Increase telemetry monitoring frequency.
+       Primary risk: Single Event Upset (score: 11)
+
+MISSION WINDOW ASSESSMENT (today's operational recommendations):
+  🛑 EVA (Spacewalk): HOLD
+       → X-class flare — elevated radiation dose risk for crew outside ISS/station
+  ⚠️  Satellite Launch: CAUTION
+       → R3/R4 flare — HF comms degraded; backup telemetry recommended
+  ✅ Orbital Maneuver: GO
+  🛑 Deep-Space Uplink: HOLD
+       → R3+ flare — HF/S-band radio blackout on sunlit hemisphere; DSN contact window lost
+  🛑 Instrument Calibration: HOLD
+       → X-class flare — elevated particle flux contaminates calibration baseline
 
 DEEP-SPACE OBJECTS & TELESCOPES: 11 tracked object(s) beyond Earth orbit.
   ★ INTERSTELLAR (beyond heliopause ~120 AU):
@@ -30,8 +55,8 @@ DEEP-SPACE OBJECTS & TELESCOPES: 11 tracked object(s) beyond Earth orbit.
     New Horizons —  65.29 AU  |  Flew past Pluto Jul 2015 & Arrokoth Jan 2019; now in Kuiper Belt
     Ulysses      —   1.45 AU  |  ESA/NASA solar polar orbiter; mission ended Jun 2009; in solar orbit
   Space telescopes:
-    Hubble Space Telescope         — 1.0141 AU from Sun  |  NASA; LEO ~547 km; launched 1990; repaired 5 times; still operational
-    James Webb Space Telescope     — 1.0229 AU from Sun  |  NASA/ESA/CSA; at L2 ~1.5M km; launched Dec 2021; deepest infrared images ever
+    Hubble Space Telescope         — 1.0141 AU from Sun  |  NASA; LEO ~547 km; launched 1990; still operational
+    James Webb Space Telescope     — 1.0229 AU from Sun  |  NASA/ESA/CSA; at L2 ~1.5M km; launched Dec 2021
     Spitzer Space Telescope        — 1.0028 AU from Sun  |  NASA infrared; Earth-trailing heliocentric orbit; retired Jan 2020
     Kepler / K2                    — 1.0249 AU from Sun  |  NASA; 2,600+ confirmed exoplanets; retired Oct 2018
   Escaped rocket bodies:
@@ -47,3 +72,20 @@ LUNAR DEBRIS INVENTORY: 38 known human-made objects on or impacted into the Moon
     2023  Vikram lander Chandrayaan-3 (1,752 kg, surface) — ISRO; first landing at lunar south pole Aug 23 2023
     2022  Chang'e 5-T1 booster (CNSA) (900 kg, impact) — Uncontrolled impact Mar 4 2022; misidentified as SpaceX
     2020  Chang'e 5 ascent stage (CNSA) (300 kg, impact) — Intentionally de-orbited Dec 2020 after sample return
+
+--- ON A QUIET DAY (all-clear example) ---
+
+OPERATIONAL STATUS: ✅ ALL CLEAR — No threshold-crossing conditions detected.
+
+SPACECRAFT HEALTH FORECAST (risk by orbit regime, 0–100):
+  🟢 LEO:   5/100 — NOMINAL  |  All systems nominal. No space weather concerns.
+  🟢 MEO:   4/100 — NOMINAL  |  All systems nominal. No space weather concerns.
+  🟢 GEO:   4/100 — NOMINAL  |  All systems nominal. No space weather concerns.
+  🟢 HEO:   4/100 — NOMINAL  |  All systems nominal. No space weather concerns.
+
+MISSION WINDOW ASSESSMENT (today's operational recommendations):
+  ✅ EVA (Spacewalk): GO
+  ✅ Satellite Launch: GO
+  ✅ Orbital Maneuver: GO
+  ✅ Deep-Space Uplink: GO
+  ✅ Instrument Calibration: GO

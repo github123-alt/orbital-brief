@@ -20,8 +20,8 @@ WATSONX_API_KEY = os.environ.get("WATSONX_API_KEY")
 WATSONX_PROJECT_ID = os.environ.get("WATSONX_PROJECT_ID")
 WATSONX_URL = os.environ.get("WATSONX_URL", "https://us-south.ml.cloud.ibm.com")
 
-# Granite model ID on watsonx.ai
-MODEL_ID = "ibm/granite-13b-instruct-v2"
+# Granite model — granite-3-8b-instruct is faster and better at instruction-following
+MODEL_ID = "ibm/granite-3-8b-instruct"
 
 
 def _get_iam_token():
@@ -41,24 +41,21 @@ def _get_iam_token():
     return resp.json()["access_token"]
 
 
-def generate_narrative(briefing_sections: dict) -> str:
+def generate_narrative(briefing_sections: dict, active_alerts: list = None) -> str:
     """
     Send the assembled briefing data to IBM watsonx.ai Granite and receive
-    a 3–4 sentence plain-English narrative summary suitable for a non-expert.
+    an actionable mission-controller-style narrative with specific operational
+    recommendations based on severity thresholds.
 
     Args:
         briefing_sections (dict): keys are section names, values are the
-            plain-text content strings produced by briefing.py, e.g.:
-            {
-                "solar_flares": "SOLAR FLARES: 3 flare(s)...",
-                "geomagnetic": "GEOMAGNETIC ACTIVITY: ...",
-                "neo": "NEAR-EARTH OBJECTS: ...",
-                "earth_events": "EARTH EVENTS (from orbit): ..."
-            }
+            plain-text content strings produced by briefing.py.
+        active_alerts (list): optional list of alert strings from the anomaly
+            detector — used to focus the AI on what actually needs attention.
 
     Returns:
-        str: AI-generated narrative paragraph, or a fallback message if
-             watsonx credentials are not configured.
+        str: AI-generated narrative with recommendations, or a fallback message
+             if watsonx credentials are not configured.
     """
     if not WATSONX_API_KEY or not WATSONX_PROJECT_ID:
         return (
@@ -67,15 +64,26 @@ def generate_narrative(briefing_sections: dict) -> str:
         )
 
     sections_text = "\n".join(briefing_sections.values())
+    alerts_text = ""
+    if active_alerts:
+        alerts_text = (
+            "\n\nACTIVE THRESHOLD ALERTS (conditions requiring immediate attention):\n"
+            + "\n".join(f"  ⚠ {a}" for a in active_alerts)
+        )
 
     prompt = (
-        "You are a space weather analyst writing a concise daily briefing for a "
-        "general audience. Based on the following raw data summary, write a "
-        "3-4 sentence plain-English narrative that highlights the most important "
-        "developments, any operational risks, and the overall space environment "
-        "outlook for today. Be factual, clear, and avoid jargon.\n\n"
-        f"RAW DATA:\n{sections_text}\n\n"
-        "NARRATIVE SUMMARY:"
+        "You are a senior space operations flight director issuing a daily briefing "
+        "to satellite operators, mission planners, and space weather engineers.\n\n"
+        "Your briefing must:\n"
+        "1. Open with a one-sentence overall threat level (LOW / MODERATE / ELEVATED / HIGH / CRITICAL)\n"
+        "2. Call out any conditions that cross operational thresholds and state the specific risk "
+        "(e.g. HF radio blackout, satellite charging, GPS degradation, aurora visibility)\n"
+        "3. Highlight the most noteworthy space exploration milestone or object position today\n"
+        "4. Close with 1-2 concrete recommended actions for operators\n\n"
+        "Be precise, factual, and operator-focused. No speculation. 4-6 sentences total.\n\n"
+        f"SENSOR DATA:\n{sections_text}"
+        f"{alerts_text}\n\n"
+        "FLIGHT DIRECTOR BRIEFING:"
     )
 
     token = _get_iam_token()
@@ -91,9 +99,9 @@ def generate_narrative(briefing_sections: dict) -> str:
         "input": prompt,
         "parameters": {
             "decoding_method": "greedy",
-            "max_new_tokens": 200,
-            "min_new_tokens": 40,
-            "stop_sequences": ["\n\n"],
+            "max_new_tokens": 300,
+            "min_new_tokens": 80,
+            "stop_sequences": ["\n\n\n"],
             "repetition_penalty": 1.1,
         },
         "project_id": WATSONX_PROJECT_ID,
@@ -104,7 +112,7 @@ def generate_narrative(briefing_sections: dict) -> str:
     result = resp.json()
 
     generated = result["results"][0]["generated_text"].strip()
-    return f"AI SUMMARY (IBM Granite): {generated}"
+    return f"AI FLIGHT DIRECTOR BRIEFING (IBM Granite):\n{generated}"
 
 
 if __name__ == "__main__":
