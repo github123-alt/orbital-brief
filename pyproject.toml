@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "orbital-brief"
 version = "1.0.0"
-description = "A daily space operations briefing powered by live NASA data."
+description = "AI-powered space operations briefing — live NASA, JPL, CelesTrak & IBM watsonx.ai."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 orbital-brief = "briefing:main"
+ask-flight-director = "ask:main_cli"
 
 [project.urls]
 Homepage = "https://github.com/your-username/orbital-brief"

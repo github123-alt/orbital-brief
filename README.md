@@ -190,8 +190,9 @@ export WATSONX_URL="https://us-south.ml.cloud.ibm.com"   # adjust region if need
 To make these permanent, add the lines above to your `~/.bashrc` or `~/.zshrc`.
 
 > **Note:** If `WATSONX_API_KEY` or `WATSONX_PROJECT_ID` are not set, the briefing will
-> still run — the AI summary line will display a configuration reminder instead.
-> CelesTrak and JPL Horizons work with no credentials at all.
+> still run and all live data sections will work normally — only the AI narrative section
+> will show a configuration reminder. `ask.py` also works without credentials by returning
+> the raw live data matched to your question. CelesTrak and JPL Horizons need no keys at all.
 
 ---
 
@@ -233,18 +234,25 @@ orbital-brief/
 
 ### ask.py — Natural Language Interface
 
-Ask any space question in plain English and get a grounded, data-backed answer:
+Ask any space question in plain English:
 
 ```bash
 python ask.py "Is it safe to do a spacewalk today?"
 python ask.py "What is Voyager 1 doing right now?"
 python ask.py "Are there any dangerous asteroids this week?"
 python ask.py "How much human trash is on the Moon?"
-python ask.py "Why might aurora be visible tonight?"
+python ask.py "How many satellites are in orbit right now?"
 ```
 
-Granite answers **only from data fetched seconds ago** — it cannot hallucinate
-outdated facts because the context is rebuilt live on every invocation.
+**Works with or without watsonx credentials:**
+
+| Credentials set? | What you get |
+|---|---|
+| ✅ Yes | IBM Granite answers in natural language, grounded in live data fetched seconds ago |
+| ❌ No | Live data is still fetched and the most relevant lines are shown directly — real data, no AI wrapper |
+
+Granite answers **only from data fetched on that run** — it cannot hallucinate outdated
+facts because the context snapshot is rebuilt live every invocation.
 
 ---
 

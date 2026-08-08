@@ -89,3 +89,44 @@ MISSION WINDOW ASSESSMENT (today's operational recommendations):
   ✅ Orbital Maneuver: GO
   ✅ Deep-Space Uplink: GO
   ✅ Instrument Calibration: GO
+
+--- ASK.PY — WITHOUT WATSONX CREDENTIALS ---
+
+$ python ask.py "Are there any dangerous asteroids this week?"
+
+Question: Are there any dangerous asteroids this week?
+
+Fetching current space data...
+[Live data — no AI (set WATSONX_API_KEY for natural language answers)]
+
+Near-Earth Objects: 40 tracked this week.
+  Closest: 6.5 lunar distances (Notable)
+
+Free watsonx access: https://dataplatform.cloud.ibm.com/
+
+--- ASK.PY — WITH WATSONX CREDENTIALS ---
+
+$ python ask.py "Is it safe to do a spacewalk today?"
+
+Question: Is it safe to do a spacewalk today?
+
+Fetching current space data...
+
+Flight Director (IBM Granite): Based on current conditions, a spacewalk is NOT
+recommended today. An X1.2-class solar flare (R3/Strong) was recorded on Aug 6,
+producing elevated particle flux that poses a radiation dose risk for crew outside
+the station. A G2 geomagnetic storm (Kp=6.7) is ongoing. Standard EVA abort criteria
+recommend waiting until flare activity drops below M-class and Kp returns to G0/G1.
+
+$ python ask.py "What is Voyager 1 doing right now?"
+
+Question: What is Voyager 1 doing right now?
+
+Fetching current space data...
+
+Flight Director (IBM Granite): Voyager 1 is currently 171.4 AU from the Sun —
+approximately 25.64 billion kilometres away — travelling through interstellar space
+beyond the heliopause. It crossed into interstellar space in August 2012 and remains
+the farthest human-made object ever launched. NASA still receives transmissions from it,
+though signals now take over 23 hours to travel one way.
+

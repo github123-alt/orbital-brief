@@ -53,11 +53,13 @@ def _build_context_snapshot() -> str:
 
     # NASA DONKI — solar flares
     try:
-        from nasa_api import fetch_solar_flares, fetch_geomagnetic_storms, fetch_near_earth_objects
-        from nasa_api import fetch_satellites, fetch_decayed_satellites, fetch_all_deep_space_objects
+        from nasa_api import (fetch_solar_flares, fetch_geomagnetic_storms,
+                              fetch_near_earth_objects, fetch_satellites,
+                              fetch_decayed_satellites, fetch_all_deep_space_objects,
+                              classify_orbit_type)
         from significance import (classify_flare, classify_geomagnetic_storm,
                                    classify_close_approach, get_lunar_debris_summary,
-                                   summarize_satellite_catalog, classify_orbit_type)
+                                   summarize_satellite_catalog)
 
         flares = fetch_solar_flares(days_back=7)
         if flares:
@@ -120,24 +122,71 @@ def _build_context_snapshot() -> str:
     return "\n".join(lines)
 
 
+def _answer_without_ai(question: str, context: str) -> str:
+    """
+    Rule-based fallback when watsonx credentials are not set.
+    Fetches live data, then surfaces the most relevant lines based on keywords
+    in the question — still useful, just without the AI interpretation layer.
+    """
+    q = question.lower()
+    context_lines = context.splitlines()
+
+    keyword_map = [
+        (["asteroid", "neo", "dangerous", "closest", "approach", "impact"],
+         lambda l: any(k in l.lower() for k in ["near-earth", "closest", "lunar distance", "pha"])),
+        (["solar flare", "flare", "radio", "blackout", "r-scale"],
+         lambda l: any(k in l.lower() for k in ["solar flare", "r0", "r1", "r2", "r3", "r4", "r5", "class flare"])),
+        (["storm", "geomagnetic", "kp", "aurora"],
+         lambda l: any(k in l.lower() for k in ["geomagnetic", "kp=", "g0", "g1", "g2", "g3", "g4", "g5"])),
+        (["satellite", "orbit", "leo", "meo", "geo", "re-enter"],
+         lambda l: any(k in l.lower() for k in ["satellite", "orbit", "re-entered"])),
+        (["voyager", "pioneer", "new horizons", "interstellar", "farthest", "deep space"],
+         lambda l: any(k in l.lower() for k in ["voyager", "pioneer", "horizons", "au from sun", "interstellar"])),
+        (["moon", "lunar", "trash", "debris", "crash", "lander"],
+         lambda l: any(k in l.lower() for k in ["lunar debris", "moon", "impact", "surface", "kg"])),
+        (["hubble", "webb", "telescope", "spitzer", "kepler"],
+         lambda l: any(k in l.lower() for k in ["hubble", "webb", "spitzer", "kepler", "telescope"])),
+        (["spacewalk", "eva", "safe", "launch", "maneuver", "mission"],
+         lambda l: any(k in l.lower() for k in ["mission window", "eva", "launch", "hold", "caution", "go"])),
+    ]
+
+    matched_lines = []
+    for keywords, line_filter in keyword_map:
+        if any(kw in q for kw in keywords):
+            matched_lines = [l for l in context_lines if line_filter(l) and l.strip()]
+            if matched_lines:
+                break
+
+    if not matched_lines:
+        matched_lines = [l for l in context_lines if l.strip()]
+
+    result = "\n".join(matched_lines[:12])
+    return (
+        f"[Live data — no AI (set WATSONX_API_KEY for natural language answers)]\n\n"
+        f"{result}\n\n"
+        f"Free watsonx access: https://dataplatform.cloud.ibm.com/"
+    )
+
+
 def ask(question: str) -> str:
     """
     Answer a plain-English question about current space conditions.
+
+    If watsonx credentials are set, IBM Granite answers in natural language
+    grounded in live data. If not, the live data is fetched anyway and the
+    most relevant lines are returned directly — still real, still useful.
 
     Args:
         question (str): the user's question
 
     Returns:
-        str: grounded answer from IBM Granite, or error message
+        str: AI answer or direct live data, never a dead error
     """
-    if not WATSONX_API_KEY or not WATSONX_PROJECT_ID:
-        return (
-            "Cannot answer: WATSONX_API_KEY and WATSONX_PROJECT_ID must be set.\n"
-            "Get free access at https://dataplatform.cloud.ibm.com/"
-        )
-
     print("Fetching current space data...", flush=True)
     context = _build_context_snapshot()
+
+    if not WATSONX_API_KEY or not WATSONX_PROJECT_ID:
+        return _answer_without_ai(question, context)
 
     prompt = (
         "You are a space operations expert with access to real-time space data. "
@@ -176,18 +225,25 @@ def ask(question: str) -> str:
     return f"Flight Director (IBM Granite): {answer}"
 
 
-if __name__ == "__main__":
+def main_cli():
+    """Entry point for `ask-flight-director` console script (pyproject.toml)."""
     if len(sys.argv) < 2:
-        print("Usage: python ask.py \"your question here\"")
+        print("Usage: ask-flight-director \"your question here\"")
+        print("   or: python ask.py \"your question here\"")
         print()
         print("Examples:")
         print('  python ask.py "Is it safe to do a spacewalk today?"')
         print('  python ask.py "What is Voyager 1 doing right now?"')
         print('  python ask.py "Are there any dangerous asteroids this week?"')
         print('  python ask.py "How much human trash is on the Moon?"')
+        print('  python ask.py "How many satellites are in orbit right now?"')
         sys.exit(0)
 
     question = " ".join(sys.argv[1:])
     print(f"\nQuestion: {question}")
     print()
     print(ask(question))
+
+
+if __name__ == "__main__":
+    main_cli()
