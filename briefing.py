@@ -3,7 +3,8 @@ briefing.py
 
 Generates a plain-language "Daily Space Operations Briefing" by combining
 real-time NASA data (DONKI, NeoWs, EONET) with significance classification
-grounded in real NOAA/NASA operational thresholds.
+grounded in real NOAA/NASA operational thresholds, topped with an
+AI-generated narrative summary from IBM watsonx.ai (Granite).
 
 Usage:
     python briefing.py
@@ -17,13 +18,21 @@ from nasa_api import (
     fetch_near_earth_objects,
     fetch_eonet_events,
     count_eonet_by_category,
+    fetch_satellites,
+    fetch_decayed_satellites,
+    classify_orbit_type,
+    fetch_all_deep_space_objects,
 )
 from significance import (
     classify_flare,
     classify_geomagnetic_storm,
     classify_close_approach,
     summarize_eonet_events,
+    summarize_satellite_catalog,
+    summarize_deep_space_objects,
+    get_lunar_debris_summary,
 )
+from watsonx import generate_narrative
 
 
 def build_flare_section():
@@ -115,20 +124,99 @@ def build_eonet_section():
     return f"EARTH EVENTS (from orbit): {summary}"
 
 
+def build_satellite_section():
+    active = fetch_satellites(group="active")
+    decayed = fetch_decayed_satellites()
+    result = summarize_satellite_catalog(active, decayed, classify_orbit_type)
+
+    lines = [f"SATELLITES: {result['summary']}"]
+
+    # Orbit breakdown
+    orbit_detail = ", ".join(
+        f"{count} {orbit}"
+        for orbit, count in result["by_orbit"].items()
+        if count > 0
+    )
+    if orbit_detail:
+        lines.append(f"  Orbit breakdown: {orbit_detail}")
+
+    # Recently decayed objects
+    if result["notable_decayed"]:
+        names = ", ".join(result["notable_decayed"])
+        lines.append(f"  Recently re-entered: {names}")
+
+    return "\n".join(lines)
+
+
+def build_deep_space_section():
+    objects = fetch_all_deep_space_objects()
+    return summarize_deep_space_objects(objects)
+
+
+def build_lunar_debris_section():
+    data = get_lunar_debris_summary()
+    lines = [
+        f"LUNAR DEBRIS INVENTORY: {data['summary']}",
+        f"  Heaviest single object: {data['heaviest']['name']} "
+        f"(~{data['heaviest']['mass_kg']:,} kg, {data['heaviest']['year']}) "
+        f"— {data['heaviest']['note']}",
+        f"  Total mass on surface: ~{data['mass_on_surface_kg']:,.0f} kg  |  "
+        f"Total mass impacted: ~{data['mass_impacted_kg']:,.0f} kg",
+    ]
+    # Show the 5 most recent items chronologically
+    recent = sorted(data["items"], key=lambda o: o["year"], reverse=True)[:5]
+    lines.append("  Most recent additions:")
+    for item in recent:
+        fate_label = "surface" if item["fate"] == "surface" else "impact"
+        lines.append(
+            f"    {item['year']}  {item['name']} ({item['mass_kg']:,} kg, {fate_label}) — {item['note']}"
+        )
+    return "\n".join(lines)
+
+
+def main():
+    print(generate_briefing())
+
+
 def generate_briefing():
     today = date.today().isoformat()
+
+    # Build each data section independently
+    section_map = {
+        "solar_flares":  build_flare_section(),
+        "geomagnetic":   build_geomagnetic_section(),
+        "neo":           build_neo_section(),
+        "earth_events":  build_eonet_section(),
+        "satellites":    build_satellite_section(),
+        "deep_space":    build_deep_space_section(),
+        "lunar_debris":  build_lunar_debris_section(),
+    }
+
+    # Ask IBM Granite to narrate the day's conditions
+    ai_narrative = generate_narrative(section_map)
+
     sections = [
         f"=== DAILY SPACE OPERATIONS BRIEFING — {today} ===\n",
-        build_flare_section(),
+        ai_narrative,
         "",
-        build_geomagnetic_section(),
+        "--- DETAILED DATA ---",
         "",
-        build_neo_section(),
+        section_map["solar_flares"],
         "",
-        build_eonet_section(),
+        section_map["geomagnetic"],
+        "",
+        section_map["neo"],
+        "",
+        section_map["earth_events"],
+        "",
+        section_map["satellites"],
+        "",
+        section_map["deep_space"],
+        "",
+        section_map["lunar_debris"],
     ]
     return "\n".join(sections)
 
 
 if __name__ == "__main__":
-    print(generate_briefing())
+    main()

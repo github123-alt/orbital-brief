@@ -1,0 +1,49 @@
+=== DAILY SPACE OPERATIONS BRIEFING — 2025-08-01 ===
+
+AI SUMMARY (IBM Granite): Today's space environment is moderately active. A strong X1.2-class solar flare on July 29th caused wide-area HF radio blackouts on the sunlit side of Earth, and a follow-on geomagnetic storm reached G2 (Moderate) levels — satellite operators at high latitudes should review attitude control logs. Eighteen near-Earth objects are being tracked this week, with asteroid 2025 NA3 making a notably close pass at 3.4 lunar distances; no impact risk is indicated. On Earth, 14 active wildfires and 3 severe storm systems are currently being monitored from orbit. The global satellite fleet stands at 9,947 active spacecraft, with 3 objects having re-entered the atmosphere in recent days.
+
+--- DETAILED DATA ---
+
+SOLAR FLARES: 5 flare(s) recorded in the past 7 days.
+  Most significant: X1.2 class flare on 2025-07-29T08:14Z — R3 (Strong). Wide-area HF radio blackout likely for about an hour.
+
+GEOMAGNETIC ACTIVITY: 2 storm(s) recorded in the past 7 days.
+  Storm starting 2025-07-28T18:00Z: peak Kp=5.3 — G1 (Minor). Minor geomagnetic storm. Weak power grid fluctuations possible; aurora visible at high latitudes.
+  Storm starting 2025-07-30T02:00Z: peak Kp=6.7 — G2 (Moderate). Moderate geomagnetic storm. High-latitude power systems may see voltage alarms.
+
+NEAR-EARTH OBJECTS: 18 object(s) tracked with close approaches in the coming week.
+  Closest approach: (2025 NA3) — Very close (within potentially-hazardous monitoring range). Passes within 3.4 lunar distances — a close approach worth tracking.
+
+EARTH EVENTS (from orbit): Currently tracking: 14 active wildfires, 3 active severe storms, 1 active volcanoes.
+
+SATELLITES: 9,947 active satellites in orbit (8,112 in LEO, 612 in MEO, 573 in GEO, 650 in HEO). 3 object(s) recently re-entered the atmosphere.
+  Orbit breakdown: 8,112 LEO, 612 MEO, 573 GEO, 650 HEO
+  Recently re-entered: COSMOS 2361, SL-8 R/B, STARLINK-1234
+
+DEEP-SPACE OBJECTS & TELESCOPES: 11 tracked object(s) beyond Earth orbit.
+  ★ INTERSTELLAR (beyond heliopause ~120 AU):
+    Voyager 1  — 171.4 AU from Sun (25.64 billion km)  Farthest human-made object; crossed into interstellar space Aug 2012; still transmitting
+    Voyager 2  — 143.6 AU from Sun (21.48 billion km)  Second farthest; crossed into interstellar space Nov 2018; still transmitting
+    Pioneer 10 — 141.6 AU from Sun (21.18 billion km)  First spacecraft through asteroid belt & past Jupiter; last contact Jan 2003
+  Deep-space probes (within heliosphere):
+    Pioneer 11   — 117.60 AU  |  First to flyby Saturn; last contact Nov 1995; heading toward constellation Aquila
+    New Horizons —  65.29 AU  |  Flew past Pluto Jul 2015 & Arrokoth Jan 2019; now in Kuiper Belt
+    Ulysses      —   1.45 AU  |  ESA/NASA solar polar orbiter; mission ended Jun 2009; in solar orbit
+  Space telescopes:
+    Hubble Space Telescope         — 1.0141 AU from Sun  |  NASA; LEO ~547 km; launched 1990; repaired 5 times; still operational
+    James Webb Space Telescope     — 1.0229 AU from Sun  |  NASA/ESA/CSA; at L2 ~1.5M km; launched Dec 2021; deepest infrared images ever
+    Spitzer Space Telescope        — 1.0028 AU from Sun  |  NASA infrared; Earth-trailing heliocentric orbit; retired Jan 2020
+    Kepler / K2                    — 1.0249 AU from Sun  |  NASA; 2,600+ confirmed exoplanets; retired Oct 2018
+  Escaped rocket bodies:
+    Chang'e 5-T1 booster  |  CNSA upper stage; impacted Moon Mar 2022 — no longer in space
+
+LUNAR DEBRIS INVENTORY: 38 known human-made objects on or impacted into the Moon, totalling ~105,355 kg (~105 metric tonnes). 24 impact(s) (~86,838 kg) and 14 object(s) still on the surface (~18,517 kg). Most recent: SLIM lander (JAXA) (2024).
+  Heaviest single object: Apollo 12 S-IVB stage (~13,930 kg, 1969) — Intentionally impacted for seismic data
+  Total mass on surface: ~18,517 kg  |  Total mass impacted: ~86,838 kg
+  NOTE: The Mar 2022 lunar impact was initially misreported as a SpaceX Falcon 9 — confirmed as China's Chang'e 5-T1 booster. No SpaceX rocket has ever been confirmed to have hit the Moon.
+  Most recent additions:
+    2024  SLIM lander (JAXA) (200 kg, surface) — Japan's precision lander; landed Jan 19 2024
+    2023  Luna 25 (Roscosmos) (800 kg, impact) — Russia's first lunar mission since 1976; crashed Aug 19 2023
+    2023  Vikram lander Chandrayaan-3 (1,752 kg, surface) — ISRO; first landing at lunar south pole Aug 23 2023
+    2022  Chang'e 5-T1 booster (CNSA) (900 kg, impact) — Uncontrolled impact Mar 4 2022; misidentified as SpaceX
+    2020  Chang'e 5 ascent stage (CNSA) (300 kg, impact) — Intentionally de-orbited Dec 2020 after sample return

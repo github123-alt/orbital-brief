@@ -199,6 +199,64 @@ def classify_close_approach(miss_distance_km, diameter_m_estimate=None):
 
 
 # ---------------------------------------------------------------------------
+# Satellites (CelesTrak)
+# ---------------------------------------------------------------------------
+
+def summarize_satellite_catalog(active_sats, decayed_sats, orbit_classifier):
+    """
+    Summarize the active and recently decayed satellite catalogs into a
+    plain-language report broken down by orbit type.
+
+    Args:
+        active_sats (list): list of satellite dicts from fetch_satellites()
+        decayed_sats (list): list of satellite dicts from fetch_decayed_satellites()
+        orbit_classifier (callable): function(period_minutes) -> orbit type string
+            (pass nasa_api.classify_orbit_type)
+
+    Returns:
+        dict with keys:
+            total_active (int)
+            total_decayed (int)
+            by_orbit (dict): {"LEO": int, "MEO": int, "GEO": int, "HEO": int, "Unknown": int}
+            notable_decayed (list of str): names of up to 5 recently decayed objects
+            summary (str): one-line plain-English description
+    """
+    orbit_counts = {"LEO": 0, "MEO": 0, "GEO": 0, "HEO": 0, "Unknown": 0}
+
+    for sat in active_sats:
+        period      = sat.get("PERIOD")
+        mean_motion = sat.get("MEAN_MOTION")
+        orbit = orbit_classifier(period_minutes=period, mean_motion=mean_motion)
+        orbit_counts[orbit] = orbit_counts.get(orbit, 0) + 1
+
+    notable_decayed = [
+        sat.get("OBJECT_NAME", "Unknown")
+        for sat in decayed_sats[:5]
+        if sat.get("OBJECT_NAME")
+    ]
+
+    orbit_parts = [
+        f"{count} in {orbit}"
+        for orbit, count in orbit_counts.items()
+        if count > 0
+    ]
+
+    summary = (
+        f"{len(active_sats):,} active satellites in orbit "
+        f"({', '.join(orbit_parts)}). "
+        f"{len(decayed_sats)} object(s) recently re-entered the atmosphere."
+    )
+
+    return {
+        "total_active": len(active_sats),
+        "total_decayed": len(decayed_sats),
+        "by_orbit": orbit_counts,
+        "notable_decayed": notable_decayed,
+        "summary": summary,
+    }
+
+
+# ---------------------------------------------------------------------------
 # EONET (Earth Observatory Natural Event Tracker)
 # ---------------------------------------------------------------------------
 
@@ -220,6 +278,181 @@ def summarize_eonet_events(events_by_category):
         return "No significant Earth events currently being tracked."
 
     return "Currently tracking: " + ", ".join(parts) + "."
+
+
+# ---------------------------------------------------------------------------
+# Deep-Space Objects (JPL Horizons)
+# ---------------------------------------------------------------------------
+
+# Heliopause distance — boundary of interstellar space (~120 AU)
+HELIOPAUSE_AU = 120.0
+
+def summarize_deep_space_objects(objects: list) -> str:
+    """
+    Turn a list of deep-space object dicts (from fetch_all_deep_space_objects)
+    into a plain-language summary, grouped by type and flagging interstellar objects.
+
+    Args:
+        objects (list): list of dicts with keys: name, type, range_au, range_km, note
+
+    Returns:
+        str: multi-line plain-language summary
+    """
+    if not objects:
+        return (
+            "DEEP-SPACE OBJECTS & TELESCOPES: Live position data unavailable "
+            "(JPL Horizons unreachable). See static catalog in nasa_api.DEEP_SPACE_OBJECTS."
+        )
+
+    interstellar = [o for o in objects if o.get("range_au", 0) >= HELIOPAUSE_AU]
+    probes       = [o for o in objects if o.get("type") == "spacecraft"
+                    and o.get("range_au", 0) < HELIOPAUSE_AU]
+    telescopes   = [o for o in objects if o.get("type") == "telescope"]
+    debris       = [o for o in objects if o.get("type") == "rocket_body"]
+
+    lines = [
+        f"DEEP-SPACE OBJECTS & TELESCOPES: {len(objects)} tracked object(s) beyond Earth orbit."
+    ]
+
+    if interstellar:
+        lines.append("  ★ INTERSTELLAR (beyond heliopause ~120 AU):")
+        for o in sorted(interstellar, key=lambda x: -x["range_au"]):
+            lines.append(
+                f"    {o['name']} — {o['range_au']:.1f} AU from Sun "
+                f"({o['range_km']/1e9:.2f} billion km)  {o.get('note','')}"
+            )
+
+    if probes:
+        lines.append("  Deep-space probes (within heliosphere):")
+        for o in sorted(probes, key=lambda x: -x["range_au"]):
+            lines.append(
+                f"    {o['name']} — {o['range_au']:.2f} AU  |  {o.get('note','')}"
+            )
+
+    if telescopes:
+        lines.append("  Space telescopes:")
+        for o in telescopes:
+            dist = (f"{o['range_au']:.4f} AU from Sun" if o.get("range_au") else "distance N/A")
+            lines.append(
+                f"    {o['name']} — {dist}  |  {o.get('note','')}"
+            )
+
+    if debris:
+        lines.append("  Escaped rocket bodies:")
+        for o in debris:
+            lines.append(
+                f"    {o['name']}  |  {o.get('note','')}"
+            )
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Lunar Debris — static inventory (no live API exists for this data)
+# ---------------------------------------------------------------------------
+#
+# Sources: NASA mission records, ESA Space Debris Office, published research.
+# Mass values are approximate; some are estimates from mission documentation.
+# "Lunar debris" = human-made objects that have impacted or been left on the Moon.
+
+# Sources: NASA NSSDCA, ESA Space Debris Office, ISRO, CNSA, JAXA mission records.
+# Mass values are confirmed from mission documentation; ~estimates where noted.
+# NOTE: A 2022 rocket booster impact was initially misattributed to SpaceX in media —
+#       subsequent trajectory analysis identified it as China's Chang'e 5-T1 booster.
+#       No SpaceX rocket has been confirmed to have impacted the Moon.
+
+LUNAR_DEBRIS_INVENTORY = [
+    # ── Intentional impactors / mission hardware ──────────────────────────
+    {"name": "Luna 2 (USSR)",               "year": 1959, "mass_kg": 390,   "fate": "impact",  "note": "First human-made object to reach the Moon"},
+    {"name": "Ranger 4 (NASA)",             "year": 1962, "mass_kg": 331,   "fate": "impact",  "note": "Crashed after systems failure"},
+    {"name": "Ranger 6 (NASA)",             "year": 1964, "mass_kg": 364,   "fate": "impact",  "note": "Camera failed; intentional impact site"},
+    {"name": "Ranger 7 (NASA)",             "year": 1964, "mass_kg": 365,   "fate": "impact",  "note": "Intentional impact after photo mission"},
+    {"name": "Ranger 8 (NASA)",             "year": 1965, "mass_kg": 366,   "fate": "impact",  "note": "Intentional impact after photo mission"},
+    {"name": "Ranger 9 (NASA)",             "year": 1965, "mass_kg": 367,   "fate": "impact",  "note": "Intentional impact after photo mission"},
+    {"name": "Luna 5 (USSR)",               "year": 1965, "mass_kg": 1476,  "fate": "impact",  "note": "Soft-landing attempt failed"},
+    {"name": "Luna 7 (USSR)",               "year": 1965, "mass_kg": 1506,  "fate": "impact",  "note": "Retrorocket failure on approach"},
+    {"name": "Luna 8 (USSR)",               "year": 1965, "mass_kg": 1550,  "fate": "impact",  "note": "Airbag failure on approach"},
+    {"name": "Surveyor 2 (NASA)",           "year": 1966, "mass_kg": 995,   "fate": "impact",  "note": "Thruster failure during descent"},
+    {"name": "Luna 15 (USSR)",              "year": 1969, "mass_kg": 2718,  "fate": "impact",  "note": "Sample-return attempt crashed during Apollo 11"},
+    {"name": "Apollo 12 S-IVB stage",       "year": 1969, "mass_kg": 13930, "fate": "impact",  "note": "Intentionally impacted for seismic data; ~13.9 t"},
+    {"name": "Apollo 13 S-IVB stage",       "year": 1970, "mass_kg": 13930, "fate": "impact",  "note": "Intentionally impacted for seismic data; ~13.9 t"},
+    {"name": "Apollo 14 S-IVB stage",       "year": 1971, "mass_kg": 13930, "fate": "impact",  "note": "Intentionally impacted for seismic data; ~13.9 t"},
+    {"name": "Apollo 15 S-IVB stage",       "year": 1971, "mass_kg": 13930, "fate": "impact",  "note": "Intentionally impacted for seismic data; ~13.9 t"},
+    {"name": "Apollo 16 S-IVB stage",       "year": 1972, "mass_kg": 13930, "fate": "impact",  "note": "Intentionally impacted for seismic data; ~13.9 t"},
+    {"name": "LCROSS impactor (NASA)",      "year": 2009, "mass_kg": 2300,  "fate": "impact",  "note": "Intentional Centaur stage impact to detect water ice"},
+    {"name": "GRAIL-A Ebb (NASA)",          "year": 2012, "mass_kg": 202,   "fate": "impact",  "note": "Intentional end-of-mission impact, Altai Scarp"},
+    {"name": "GRAIL-B Flow (NASA)",         "year": 2012, "mass_kg": 202,   "fate": "impact",  "note": "Intentional end-of-mission impact, Altai Scarp"},
+    {"name": "Chang'e 5-T1 booster (CNSA)", "year": 2022, "mass_kg": 900,   "fate": "impact",  "note": "Uncontrolled lunar impact Mar 4 2022; initially misidentified as SpaceX Falcon 9 upper stage — trajectory analysis confirmed CNSA origin"},
+    {"name": "Beresheet (SpaceIL)",         "year": 2019, "mass_kg": 585,   "fate": "impact",  "note": "Engine failure on descent; crash-landed Mare Tranquillitatis"},
+    {"name": "Vikram lander Chandrayaan-2", "year": 2019, "mass_kg": 1471,  "fate": "impact",  "note": "ISRO Chandrayaan-2; lost contact 2.1 km above surface; crash-landed"},
+    {"name": "Luna 25 (Roscosmos)",         "year": 2023, "mass_kg": 800,   "fate": "impact",  "note": "Russia's first lunar mission since 1976; engine malfunction caused crash Aug 19 2023"},
+    # ── Landers / rovers confirmed on surface ─────────────────────────────
+    {"name": "Luna 9 lander (USSR)",        "year": 1966, "mass_kg": 99,    "fate": "surface", "note": "First soft landing; Oceanus Procellarum"},
+    {"name": "Surveyor 1 (NASA)",           "year": 1966, "mass_kg": 270,   "fate": "surface", "note": "Still on surface, Oceanus Procellarum"},
+    {"name": "Apollo 11 LM descent stage",  "year": 1969, "mass_kg": 2034,  "fate": "surface", "note": "Eagle, Sea of Tranquility; EVA equipment, flags, experiments left"},
+    {"name": "Apollo 12 LM descent stage",  "year": 1969, "mass_kg": 2034,  "fate": "surface", "note": "Intrepid, Oceanus Procellarum"},
+    {"name": "Apollo 14 LM descent stage",  "year": 1971, "mass_kg": 2034,  "fate": "surface", "note": "Antares, Fra Mauro"},
+    {"name": "Apollo 15 LM descent stage",  "year": 1971, "mass_kg": 2034,  "fate": "surface", "note": "Falcon, Hadley Rille"},
+    {"name": "Apollo 16 LM descent stage",  "year": 1972, "mass_kg": 2034,  "fate": "surface", "note": "Orion, Descartes Highlands"},
+    {"name": "Apollo 17 LM descent stage",  "year": 1972, "mass_kg": 2034,  "fate": "surface", "note": "Challenger, Taurus-Littrow"},
+    {"name": "Lunokhod 1 rover (USSR)",     "year": 1970, "mass_kg": 756,   "fate": "surface", "note": "First roving vehicle on another world; Sea of Rains"},
+    {"name": "Lunokhod 2 rover (USSR)",     "year": 1973, "mass_kg": 836,   "fate": "surface", "note": "Mare Serenitatis; still visible via NASA LRO imagery"},
+    {"name": "Chang'e 3 lander (CNSA)",     "year": 2013, "mass_kg": 1200,  "fate": "surface", "note": "Mare Imbrium; Yutu rover also on surface"},
+    {"name": "Chang'e 4 lander (CNSA)",     "year": 2019, "mass_kg": 1200,  "fate": "surface", "note": "Von Kármán crater, far side; Yutu-2 rover still active as of 2024"},
+    {"name": "Chang'e 5 ascent stage (CNSA)","year": 2020, "mass_kg": 300,  "fate": "impact",  "note": "Intentionally de-orbited after sample return; impacted lunar surface Dec 2020"},
+    {"name": "Vikram lander Chandrayaan-3", "year": 2023, "mass_kg": 1752,  "fate": "surface", "note": "ISRO; first successful soft landing at lunar south pole, Aug 23 2023; Pragyan rover deployed"},
+    {"name": "SLIM lander (JAXA)",          "year": 2024, "mass_kg": 200,   "fate": "surface", "note": "Japan's Smart Lander; precision landing Jan 19 2024; landed on its nose but solar panels generated power"},
+]
+
+
+def get_lunar_debris_summary() -> dict:
+    """
+    Summarize the known lunar debris inventory into counts, total mass,
+    and a plain-language description.
+
+    Returns:
+        dict with keys:
+            total_objects (int)
+            total_mass_kg (float)
+            impacts (int)          — objects that crashed/impacted
+            on_surface (int)       — landers/rovers left on surface
+            mass_impacted_kg (float)
+            mass_on_surface_kg (float)
+            heaviest (dict)        — single heaviest item
+            most_recent (dict)     — most recent addition
+            summary (str)          — one-line plain-English overview
+            items (list)           — full inventory list
+    """
+    impacts    = [o for o in LUNAR_DEBRIS_INVENTORY if o["fate"] == "impact"]
+    on_surface = [o for o in LUNAR_DEBRIS_INVENTORY if o["fate"] == "surface"]
+
+    total_mass       = sum(o["mass_kg"] for o in LUNAR_DEBRIS_INVENTORY)
+    mass_impacted    = sum(o["mass_kg"] for o in impacts)
+    mass_on_surface  = sum(o["mass_kg"] for o in on_surface)
+
+    heaviest     = max(LUNAR_DEBRIS_INVENTORY, key=lambda o: o["mass_kg"])
+    most_recent  = max(LUNAR_DEBRIS_INVENTORY, key=lambda o: o["year"])
+
+    summary = (
+        f"{len(LUNAR_DEBRIS_INVENTORY)} known human-made objects on or impacted into the Moon, "
+        f"totalling ~{total_mass:,.0f} kg. "
+        f"{len(impacts)} impact(s) (~{mass_impacted:,.0f} kg) and "
+        f"{len(on_surface)} object(s) still on the surface (~{mass_on_surface:,.0f} kg). "
+        f"Most recent: {most_recent['name']} ({most_recent['year']})."
+    )
+
+    return {
+        "total_objects":      len(LUNAR_DEBRIS_INVENTORY),
+        "total_mass_kg":      total_mass,
+        "impacts":            len(impacts),
+        "on_surface":         len(on_surface),
+        "mass_impacted_kg":   mass_impacted,
+        "mass_on_surface_kg": mass_on_surface,
+        "heaviest":           heaviest,
+        "most_recent":        most_recent,
+        "summary":            summary,
+        "items":              LUNAR_DEBRIS_INVENTORY,
+    }
 
 
 # ---------------------------------------------------------------------------
