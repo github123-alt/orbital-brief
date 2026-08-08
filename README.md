@@ -1,16 +1,107 @@
 # 🛰️ Orbital Brief
 
-**A daily space operations briefing — powered by live NASA, JPL, and CelesTrak data.**
+**An AI-powered daily space operations briefing — turning raw space agency data into actionable insights.**
 
-Orbital Brief pulls real-time data from five official space-agency APIs and translates
-it into a plain-language, operationally meaningful daily report — topped with an
-AI-generated narrative from IBM watsonx.ai (Granite). Think of it as a mission-control
-morning brief that is always current, no matter when you run it.
+> **IBM Bob August Challenge — Space Exploration Theme**
 
-> **Run this today, run it in 50 years — it will always show the data for that day.**
-> Voyager 1 will show its actual distance in 2075. The asteroid list will be that
-> week's real approaches. The satellite count will reflect whatever is in orbit then.
-> See [What updates automatically](#what-updates-automatically-forever) for the full breakdown.
+---
+
+## Problem Statement
+
+Space exploration generates enormous volumes of data every day — solar flare readings, asteroid trajectories, geomagnetic storm indices, satellite re-entry logs, and spacecraft telemetry — spread across dozens of disconnected NASA, ESA, and NOAA systems. Satellite operators, mission planners, and space researchers must manually check multiple dashboards and translate raw numbers into operational decisions. There is no single tool that aggregates all this data, interprets it against real operational thresholds, and delivers a plain-language briefing with concrete recommendations.
+
+The result: **data-rich, insight-poor** decision-making in an environment where the cost of a wrong call can be a failed mission, a damaged satellite, or a crew safety incident.
+
+---
+
+## Solution Description
+
+**Orbital Brief** is an AI-powered daily space operations platform that:
+
+1. **Pulls real-time data** from 5 official space-agency APIs (NASA DONKI, NeoWs, EONET, CelesTrak, JPL Horizons) every time it runs
+2. **Classifies every reading** against real NOAA/NASA operational thresholds (R-scale, G-scale, PHA criteria, lunar distance tiers)
+3. **Detects anomalies automatically** — flags any condition crossing an operational threshold (X-class flare, G3+ storm, PHA asteroid, debris surge)
+4. **Forecasts spacecraft health** — computes a 0–100 risk score across 5 dimensions for LEO, MEO, GEO, and HEO spacecraft
+5. **Assesses mission windows** — issues GO / CAUTION / HOLD for EVA, satellite launch, orbital maneuvers, deep-space uplinks, and instrument calibration
+6. **Generates an AI flight director briefing** via IBM watsonx.ai Granite — a structured narrative with threat level, specific operational risks, and recommended actions
+7. **Answers natural language questions** — `python ask.py "Is it safe to do a spacewalk today?"` fetches live data and returns a grounded answer
+
+The output is a single, always-current briefing that works for space engineers, researchers, and curious members of the public alike. Run it today, run it in 50 years — it always shows the data for that exact day.
+
+---
+
+## AI Approach and Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    DATA LAYER (Live APIs)                │
+│  NASA DONKI · NASA NeoWs · NASA EONET · CelesTrak        │
+│  JPL Horizons                          [nasa_api.py]     │
+└────────────────────────┬────────────────────────────────┘
+                         │ raw JSON
+┌────────────────────────▼────────────────────────────────┐
+│              CLASSIFICATION & ALERT LAYER               │
+│  NOAA R-scale · G-scale · PHA · Orbit types             │
+│  Anomaly detector — threshold crossing flags            │
+│  Spacecraft risk scorer (0–100 per orbit regime)        │
+│  Mission window advisor (GO/CAUTION/HOLD)  [significance.py]
+│                         [mission_planner.py]            │
+│                         [spacecraft_health.py]          │
+└────────────────────────┬────────────────────────────────┘
+                         │ structured sections + alerts
+┌────────────────────────▼────────────────────────────────┐
+│                   AI LAYER (IBM Granite)                 │
+│  Model: ibm/granite-3-8b-instruct on watsonx.ai         │
+│  Role: Senior space operations flight director          │
+│  Input: All classified sections + active alert list     │
+│  Output: Structured briefing — threat level, risks,     │
+│          exploration milestones, recommended actions    │
+│                                         [watsonx.py]    │
+└────────────────────────┬────────────────────────────────┘
+                         │ final report
+┌────────────────────────▼────────────────────────────────┐
+│                   OUTPUT LAYER                          │
+│  briefing.py — daily printed report                     │
+│  ask.py — natural language Q&A ("Ask the Flight         │
+│            Director"), grounded in live data,           │
+│            works with or without watsonx credentials    │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Why IBM Granite specifically?**
+- The AI is given a **flight director persona** with 4 explicit structural instructions — not a generic summarisation prompt
+- All alerts detected by the rule-based layer are injected into the AI context, so Granite focuses on what actually needs attention
+- The Q&A interface (`ask.py`) prevents hallucination by grounding every answer in a live data snapshot built seconds before the question is answered
+- Model upgraded to `granite-3-8b-instruct` for better instruction-following over the older `granite-13b-instruct-v2`
+
+---
+
+## Selected Challenge Theme
+
+**Space Exploration** — specifically targeting:
+- AI-powered mission planning assistants → `mission_planner.py`
+- Predictive spacecraft monitoring and anomaly detection → `spacecraft_health.py` + `significance.detect_alerts()`
+- Space debris tracking → lunar debris inventory + satellite re-entry tracking
+- Tools that translate complex space data into clear insights → the entire briefing pipeline
+- Space operations and decision-support systems → GO/CAUTION/HOLD mission windows
+- Space education and public engagement → `ask.py` natural language interface
+
+---
+
+## How IBM Bob Was Used
+
+IBM Bob was the **primary and exclusive development tool** for this entire project. Every file was written, debugged, and refined through Bob conversations:
+
+- **Architecture design** — Bob proposed the modular 5-layer architecture (data → classification → alert → AI → output) and all module boundaries
+- **API integration** — Bob researched and identified all 5 data sources (NASA DONKI, NeoWs, EONET, CelesTrak, JPL Horizons), found the correct endpoints, debugged 403 errors from CelesTrak (HTTP vs HTTPS, User-Agent headers, blocked `active` group), and fixed the wrong JPL Horizons URL
+- **Classification logic** — Bob implemented all NOAA R-scale, G-scale, PHA, and lunar distance threshold tables grounded in real operational standards
+- **Anomaly detection** — Bob designed and implemented the `detect_alerts()` function that scans all sections for threshold-crossing conditions
+- **Spacecraft risk scoring** — Bob built the weighted multi-dimensional risk matrix across LEO/MEO/GEO/HEO with 5 physical risk dimensions
+- **Mission window advisor** — Bob implemented the GO/CAUTION/HOLD rule engine for 5 operation types
+- **IBM Granite prompt engineering** — Bob upgraded the prompt from a generic summariser to a structured flight director persona with 4 explicit output requirements
+- **Lunar debris inventory** — Bob researched and fact-checked all 38 objects, corrected the SpaceX/Chang'e 5-T1 misidentification, and added recently missing missions (Luna 25, Chandrayaan-3, SLIM)
+- **`ask.py` Q&A interface** — Bob designed the live-data grounding architecture to prevent hallucination, and implemented the no-credentials fallback
+- **Documentation** — Every section of this README was written and updated by Bob across multiple sessions
 
 ---
 
@@ -66,52 +157,32 @@ NEAR-EARTH OBJECTS: 18 object(s) tracked with close approaches in the coming wee
 EARTH EVENTS (from orbit): Currently tracking: 14 active wildfires, 3 active severe storms.
 
 SATELLITES: 1,656 active satellites (1,609 LEO, 14 MEO, 24 GEO, 9 HEO). 275 re-entered recently.
-  Recently re-entered: STARLINK-37886, STARLINK-37937, STARLINK-37903
 
 SPACECRAFT HEALTH FORECAST (risk by orbit regime, 0–100):
   🟠 LEO:  56/100 — MODERATE  |  Increase telemetry monitoring frequency.
-       Primary risk: Radiation Dose
   🔴 MEO:  61/100 — HIGH      |  Consider protective mode for sensitive instruments.
-       Primary risk: Radiation Dose
   🟠 GEO:  58/100 — MODERATE  |  Increase telemetry monitoring frequency.
-       Primary risk: Comms Integrity
   🟠 HEO:  57/100 — MODERATE  |  Increase telemetry monitoring frequency.
-       Primary risk: Single Event Upset
 
 MISSION WINDOW ASSESSMENT (today's operational recommendations):
-  🛑 EVA (Spacewalk): HOLD
-       → X-class flare — elevated radiation dose risk for crew outside ISS
-  ⚠️  Satellite Launch: CAUTION
-       → R3/R4 flare — HF comms degraded; use backup telemetry
+  🛑 EVA (Spacewalk): HOLD   → X-class flare — elevated radiation dose risk
+  ⚠️  Satellite Launch: CAUTION → R3/R4 flare — HF comms degraded
   ✅ Orbital Maneuver: GO
-  🛑 Deep-Space Uplink: HOLD
-       → R3+ flare — HF/S-band blackout on sunlit hemisphere; DSN window lost
-  🛑 Instrument Calibration: HOLD
-       → X-class flare — elevated particle flux contaminates calibration baseline
+  🛑 Deep-Space Uplink: HOLD → R3+ flare — DSN contact window lost
+  🛑 Instrument Calibration: HOLD → elevated particle flux
 
 DEEP-SPACE OBJECTS & TELESCOPES: 11 tracked object(s) beyond Earth orbit.
-  ★ INTERSTELLAR:
-    Voyager 1  — 171.4 AU (25.64 billion km) — farthest human-made object; still transmitting
-    Voyager 2  — 143.6 AU (21.48 billion km) — in interstellar space since Nov 2018
-    Pioneer 10 — 141.6 AU (21.18 billion km) — last contact Jan 2003
-  Deep-space probes: Pioneer 11 (117.6 AU), New Horizons (65.3 AU), Ulysses (1.45 AU)
-  Space telescopes: Hubble (1.014 AU, operational), Webb (1.023 AU, L2), Spitzer, Kepler
+  ★ INTERSTELLAR: Voyager 1 (171.4 AU), Voyager 2 (143.6 AU), Pioneer 10 (141.6 AU)
+  Deep-space probes: Pioneer 11 (117.6 AU), New Horizons (65.3 AU)
+  Space telescopes: Hubble (operational, LEO), Webb (L2), Spitzer, Kepler
 
-LUNAR DEBRIS: 38 objects, ~105 metric tonnes on/impacted into the Moon.
-  Most recent: SLIM lander (JAXA, Jan 2024) | Heaviest: Apollo S-IVB ~13,930 kg each
-  NOTE: Mar 2022 lunar impact = Chang'e 5-T1 booster (CNSA), not SpaceX Falcon 9.
+LUNAR DEBRIS: 38 objects, ~105 metric tonnes. Most recent: SLIM lander (JAXA, Jan 2024).
 
 --- ON A QUIET DAY ---
 
 OPERATIONAL STATUS: ✅ ALL CLEAR — No threshold-crossing conditions detected.
-
-SPACECRAFT HEALTH FORECAST:
-  🟢 LEO: 5/100 — NOMINAL | 🟢 MEO: 4/100 — NOMINAL
-  🟢 GEO: 4/100 — NOMINAL | 🟢 HEO: 4/100 — NOMINAL
-
-MISSION WINDOW ASSESSMENT:
-  ✅ EVA (Spacewalk): GO  ✅ Satellite Launch: GO  ✅ Orbital Maneuver: GO
-  ✅ Deep-Space Uplink: GO  ✅ Instrument Calibration: GO
+SPACECRAFT HEALTH: 🟢 LEO: 5/100 NOMINAL  🟢 MEO: 4/100 NOMINAL  🟢 GEO: 4/100 NOMINAL
+MISSION WINDOWS:   ✅ EVA: GO  ✅ Launch: GO  ✅ Maneuver: GO  ✅ Uplink: GO  ✅ Calibration: GO
 ```
 
 See [`sample_output.txt`](sample_output.txt) for the complete untruncated example.
@@ -199,10 +270,17 @@ To make these permanent, add the lines above to your `~/.bashrc` or `~/.zshrc`.
 ## Usage
 
 ```bash
+# Run the full daily briefing
 python briefing.py
+
+# Ask a specific question in plain English
+python ask.py "Is it safe to do a spacewalk today?"
+python ask.py "Are there any dangerous asteroids this week?"
+python ask.py "What is Voyager 1 doing right now?"
+python ask.py "How much human trash is on the Moon?"
 ```
 
-That's it. The briefing prints to stdout, so you can pipe it anywhere:
+Save, schedule, or pipe the briefing:
 
 ```bash
 # Save today's briefing
