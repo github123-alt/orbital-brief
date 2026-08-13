@@ -16,6 +16,7 @@ CelesTrak and JPL Horizons require no API key.
 import os
 import requests
 from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 NASA_API_KEY = os.environ.get("NASA_API_KEY")
 BASE_URL = "https://api.nasa.gov"
@@ -167,14 +168,21 @@ CELESTRAK_GROUPS = [
 ]
 
 
-def _fetch_group(group: str) -> list:
-    """Fetch one CelesTrak group; return empty list on any error."""
+def _fetch_group(group: str, timeout: int = 8) -> list:
+    """Fetch one CelesTrak group; return empty list on any error.
+
+    timeout is intentionally short (8s, down from 20s) — if CelesTrak is
+    slow or blocked from the current network, we want to fail fast rather
+    than stall the whole request. This function is also called in parallel
+    across groups (see fetch_satellites), so a single slow group no longer
+    blocks the others.
+    """
     try:
         response = requests.get(
             CELESTRAK_URL,
             params={"GROUP": group, "FORMAT": "json"},
             headers=CELESTRAK_HEADERS,
-            timeout=20,
+            timeout=timeout,
         )
         response.raise_for_status()
         data = response.json()
@@ -194,6 +202,9 @@ def fetch_satellites(group="active"):
     named groups because CelesTrak blocks the full "active" dataset.
     Otherwise fetches the specific group requested.
 
+    Groups are fetched IN PARALLEL (not sequentially) so a single slow or
+    blocked group only costs its own timeout, not 9x that time.
+
     Args:
         group (str): CelesTrak GROUP name, or "active" for the aggregated set.
 
@@ -205,12 +216,14 @@ def fetch_satellites(group="active"):
     if group == "active":
         seen = set()
         satellites = []
-        for g in CELESTRAK_GROUPS:
-            for sat in _fetch_group(g):
-                norad_id = sat.get("NORAD_CAT_ID")
-                if norad_id and norad_id not in seen:
-                    seen.add(norad_id)
-                    satellites.append(sat)
+        with ThreadPoolExecutor(max_workers=len(CELESTRAK_GROUPS)) as executor:
+            futures = {executor.submit(_fetch_group, g): g for g in CELESTRAK_GROUPS}
+            for future in as_completed(futures):
+                for sat in future.result():
+                    norad_id = sat.get("NORAD_CAT_ID")
+                    if norad_id and norad_id not in seen:
+                        seen.add(norad_id)
+                        satellites.append(sat)
         return satellites
 
     return _fetch_group(group)
@@ -339,7 +352,7 @@ def fetch_deep_space_object(horizons_id: str, name: str) -> dict | None:
         "QUANTITIES": "19",        # range & range-rate
     }
     try:
-        resp = requests.get(JPL_HORIZONS_URL, params=params, timeout=20)
+        resp = requests.get(JPL_HORIZONS_URL, params=params, timeout=8)
         resp.raise_for_status()
         result_text = resp.json().get("result", "")
 
@@ -382,16 +395,26 @@ def fetch_all_deep_space_objects() -> list[dict]:
     Objects that fail to return data are silently skipped (e.g. objects
     that have already impacted the Moon or are no longer tracked).
 
+    Objects are queried IN PARALLEL (not sequentially) — with 11 objects
+    and an 8s timeout each, sequential fetching could cost up to ~90s if
+    JPL Horizons is slow; in parallel it costs roughly one timeout's worth.
+
     Returns:
         list of dicts with keys: name, horizons_id, range_au, range_km, type, note
     """
     results = []
-    for obj in DEEP_SPACE_OBJECTS:
-        result = fetch_deep_space_object(obj["id"], obj["name"])
-        if result:
-            result["type"] = obj["type"]
-            result["note"] = obj.get("note", "")
-            results.append(result)
+    with ThreadPoolExecutor(max_workers=len(DEEP_SPACE_OBJECTS)) as executor:
+        futures = {
+            executor.submit(fetch_deep_space_object, obj["id"], obj["name"]): obj
+            for obj in DEEP_SPACE_OBJECTS
+        }
+        for future in as_completed(futures):
+            obj = futures[future]
+            result = future.result()
+            if result:
+                result["type"] = obj["type"]
+                result["note"] = obj.get("note", "")
+                results.append(result)
     return results
 
 
