@@ -194,7 +194,8 @@ def _fetch_group(group: str, timeout: int = 8) -> list:
         )
         if response.status_code != 200:
             print(f"[nasa_api] CelesTrak group '{group}' returned "
-                  f"HTTP {response.status_code}: {response.text[:200]}")
+                  f"HTTP {response.status_code}: {response.text[:200]}",
+                  flush=True)
             return []
         data = response.json()
         # Tag each entry with its source group
@@ -203,7 +204,7 @@ def _fetch_group(group: str, timeout: int = 8) -> list:
         return data
     except Exception as e:
         print(f"[nasa_api] CelesTrak group '{group}' failed: "
-              f"{type(e).__name__}: {e}")
+              f"{type(e).__name__}: {e}", flush=True)
         return []
 
 
