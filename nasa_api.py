@@ -208,6 +208,42 @@ def _fetch_group(group: str, timeout: int = 8) -> list:
         return []
 
 
+def fetch_satellites_with_status(group="active"):
+    """
+    Same as fetch_satellites(), but also reports whether CelesTrak was
+    actually reachable — so callers can distinguish "genuinely 0 results"
+    from "every request failed, so this list is meaningless."
+
+    Render (and some other cloud hosts) can have their entire IP range
+    connection-timeout against celestrak.org at the network level — not a
+    403, just no TCP connection at all. When that happens every group
+    fails identically, which this function surfaces via `reachable=False`.
+
+    Returns:
+        (satellites: list, reachable: bool)
+        reachable is True if at least one group returned real data.
+    """
+    if group != "active":
+        data = _fetch_group(group)
+        return data, len(data) > 0
+
+    seen = set()
+    satellites = []
+    any_success = False
+    with ThreadPoolExecutor(max_workers=len(CELESTRAK_GROUPS)) as executor:
+        futures = {executor.submit(_fetch_group, g): g for g in CELESTRAK_GROUPS}
+        for future in as_completed(futures):
+            group_data = future.result()
+            if group_data:
+                any_success = True
+            for sat in group_data:
+                norad_id = sat.get("NORAD_CAT_ID")
+                if norad_id and norad_id not in seen:
+                    seen.add(norad_id)
+                    satellites.append(sat)
+    return satellites, any_success
+
+
 def fetch_satellites(group="active"):
     """
     Fetch satellite data from CelesTrak.

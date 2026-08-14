@@ -54,7 +54,7 @@ def _build_context_snapshot() -> str:
     # NASA DONKI — solar flares
     try:
         from nasa_api import (fetch_solar_flares, fetch_geomagnetic_storms,
-                              fetch_near_earth_objects, fetch_satellites,
+                              fetch_near_earth_objects, fetch_satellites_with_status,
                               fetch_decayed_satellites, fetch_all_deep_space_objects,
                               classify_orbit_type)
         from significance import (classify_flare, classify_geomagnetic_storm,
@@ -97,11 +97,15 @@ def _build_context_snapshot() -> str:
             r = classify_close_approach(closest_km)
             lines.append(f"  Closest: {r['distance_ld']:.1f} lunar distances ({r['tier']})")
 
-        active = fetch_satellites(group="active")
-        decayed = fetch_decayed_satellites()
-        cat = summarize_satellite_catalog(active, decayed, classify_orbit_type)
-        lines.append(f"Satellites: {cat['total_active']:,} active in orbit. "
-                     f"{cat['total_decayed']} re-entered recently.")
+        active, active_reachable = fetch_satellites_with_status(group="active")
+        if active_reachable:
+            decayed = fetch_decayed_satellites()
+            cat = summarize_satellite_catalog(active, decayed, classify_orbit_type)
+            lines.append(f"Satellites: {cat['total_active']:,} active in orbit. "
+                         f"{cat['total_decayed']} re-entered recently.")
+        else:
+            lines.append("Satellites: catalog temporarily unavailable "
+                         "(CelesTrak unreachable from this server).")
 
         deep = fetch_all_deep_space_objects()
         for obj in deep:

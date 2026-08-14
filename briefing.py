@@ -20,6 +20,7 @@ from nasa_api import (
     fetch_eonet_events,
     count_eonet_by_category,
     fetch_satellites,
+    fetch_satellites_with_status,
     fetch_decayed_satellites,
     classify_orbit_type,
     fetch_all_deep_space_objects,
@@ -129,7 +130,16 @@ def build_eonet_section():
 
 
 def build_satellite_section():
-    active = fetch_satellites(group="active")
+    active, active_reachable = fetch_satellites_with_status(group="active")
+
+    if not active_reachable:
+        return (
+            "SATELLITES: Catalog temporarily unavailable — CelesTrak "
+            "could not be reached from this server (a network-level "
+            "restriction on this hosting provider, not a data problem). "
+            "Other sections are unaffected."
+        )
+
     decayed = fetch_decayed_satellites()
     result = summarize_satellite_catalog(active, decayed, classify_orbit_type)
 
