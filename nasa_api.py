@@ -145,8 +145,11 @@ def count_eonet_by_category(events):
     return counts
 
 
-# CelesTrak blocks HTTPS from server/cloud IPs; use HTTP which works universally.
-CELESTRAK_URL = "http://celestrak.org/NORAD/elements/gp.php"
+# NOTE: previously hardcoded to http:// based on earlier local debugging.
+# On Render (and many PaaS platforms), outbound HTTP (port 80) traffic can
+# be restricted or dropped even when HTTPS works fine — which would explain
+# 0 results with no visible error. Using HTTPS, the actual current endpoint.
+CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php"
 
 CELESTRAK_HEADERS = {
     "User-Agent": "orbital-brief/1.0 (https://github.com/your-username/orbital-brief)"
@@ -176,6 +179,11 @@ def _fetch_group(group: str, timeout: int = 8) -> list:
     than stall the whole request. This function is also called in parallel
     across groups (see fetch_satellites), so a single slow group no longer
     blocks the others.
+
+    On any failure, prints a diagnostic line (status code or exception type)
+    so the real cause is visible in server logs instead of silently
+    returning an empty list. Look for lines starting with "[nasa_api]" in
+    Render's Logs tab to see exactly why a group failed.
     """
     try:
         response = requests.get(
@@ -184,13 +192,18 @@ def _fetch_group(group: str, timeout: int = 8) -> list:
             headers=CELESTRAK_HEADERS,
             timeout=timeout,
         )
-        response.raise_for_status()
+        if response.status_code != 200:
+            print(f"[nasa_api] CelesTrak group '{group}' returned "
+                  f"HTTP {response.status_code}: {response.text[:200]}")
+            return []
         data = response.json()
         # Tag each entry with its source group
         for sat in data:
             sat["_group"] = group
         return data
-    except Exception:
+    except Exception as e:
+        print(f"[nasa_api] CelesTrak group '{group}' failed: "
+              f"{type(e).__name__}: {e}")
         return []
 
 
