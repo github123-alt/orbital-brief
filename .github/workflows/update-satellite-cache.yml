@@ -28,6 +28,8 @@ jobs:
         run: pip install requests
 
       - name: Fetch satellite data and update cache
+        env:
+          NASA_API_KEY: ${{ secrets.NASA_API_KEY }}
         run: python update_satellite_cache.py
 
       - name: Commit and push if the cache changed
