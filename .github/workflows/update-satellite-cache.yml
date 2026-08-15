@@ -1,0 +1,39 @@
+name: Update satellite cache
+
+# Runs on GitHub's own servers, which CelesTrak does not block (unlike
+# Render). Fetches fresh satellite data every 6 hours and commits it to
+# satellite_cache.json — Render auto-deploys on that commit and picks up
+# the new file automatically.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours
+  workflow_dispatch: {}       # lets you also trigger it manually from the
+                               # Actions tab on GitHub, for testing
+
+permissions:
+  contents: write
+
+jobs:
+  update-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch satellite data and update cache
+        run: python update_satellite_cache.py
+
+      - name: Commit and push if the cache changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add satellite_cache.json
+          git diff --staged --quiet || git commit -m "Update satellite cache [automated]"
+          git push

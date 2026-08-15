@@ -97,15 +97,16 @@ def _build_context_snapshot() -> str:
             r = classify_close_approach(closest_km)
             lines.append(f"  Closest: {r['distance_ld']:.1f} lunar distances ({r['tier']})")
 
-        active, active_reachable = fetch_satellites_with_status(group="active")
-        if active_reachable:
+        active, status, cached_at = fetch_satellites_with_status(group="active")
+        if status in ("live", "cached"):
             decayed = fetch_decayed_satellites()
             cat = summarize_satellite_catalog(active, decayed, classify_orbit_type)
+            note = f" (cached from {cached_at})" if status == "cached" else ""
             lines.append(f"Satellites: {cat['total_active']:,} active in orbit. "
-                         f"{cat['total_decayed']} re-entered recently.")
+                         f"{cat['total_decayed']} re-entered recently.{note}")
         else:
             lines.append("Satellites: catalog temporarily unavailable "
-                         "(CelesTrak unreachable from this server).")
+                         "(CelesTrak unreachable, no cache yet).")
 
         deep = fetch_all_deep_space_objects()
         for obj in deep:

@@ -14,9 +14,37 @@ CelesTrak and JPL Horizons require no API key.
 """
 
 import os
+import json
 import requests
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Path to a cached snapshot of CelesTrak data, kept fresh by a scheduled
+# GitHub Action (see .github/workflows/update-satellite-cache.yml) since
+# Render's network cannot reach celestrak.org directly (see
+# fetch_satellites_with_status for the full explanation). This file lives
+# in the repo root and gets updated + redeployed automatically.
+SATELLITE_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "satellite_cache.json"
+)
+
+
+def _load_satellite_cache():
+    """
+    Reads the cached satellite snapshot from disk, if present.
+    Returns (active_list, decayed_list, cached_at_iso) or (None, None, None)
+    if no cache file exists yet (e.g. before the first Action run).
+    """
+    try:
+        with open(SATELLITE_CACHE_PATH, "r") as f:
+            data = json.load(f)
+        return (
+            data.get("active", []),
+            data.get("decayed", []),
+            data.get("cached_at"),
+        )
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None, None, None
 
 NASA_API_KEY = os.environ.get("NASA_API_KEY")
 BASE_URL = "https://api.nasa.gov"
@@ -210,22 +238,30 @@ def _fetch_group(group: str, timeout: int = 8) -> list:
 
 def fetch_satellites_with_status(group="active"):
     """
-    Same as fetch_satellites(), but also reports whether CelesTrak was
-    actually reachable — so callers can distinguish "genuinely 0 results"
-    from "every request failed, so this list is meaningless."
+    Same as fetch_satellites(), but also reports data provenance so callers
+    can show an honest message instead of a misleading result:
 
-    Render (and some other cloud hosts) can have their entire IP range
-    connection-timeout against celestrak.org at the network level — not a
-    403, just no TCP connection at all. When that happens every group
-    fails identically, which this function surfaces via `reachable=False`.
+    Render's network cannot open a TCP connection to celestrak.org at all
+    (confirmed via diagnostic logging — every request times out at connect,
+    not a 403 or slow response). This is a network-level restriction some
+    cloud hosts run into with CelesTrak, and it isn't fixable by changing
+    URLs, headers, or timeouts in this code.
+
+    The real fix: a separate scheduled job (see
+    .github/workflows/update-satellite-cache.yml) runs on GitHub's own
+    servers, which CelesTrak does not block, and commits a fresh snapshot
+    to satellite_cache.json in this repo periodically. When live CelesTrak
+    access fails, this function falls back to that cached snapshot.
 
     Returns:
-        (satellites: list, reachable: bool)
-        reachable is True if at least one group returned real data.
+        (satellites: list, status: str, cached_at: str | None)
+        status is one of: "live", "cached", "unavailable"
     """
     if group != "active":
         data = _fetch_group(group)
-        return data, len(data) > 0
+        if data:
+            return data, "live", None
+        return [], "unavailable", None
 
     seen = set()
     satellites = []
@@ -241,7 +277,18 @@ def fetch_satellites_with_status(group="active"):
                 if norad_id and norad_id not in seen:
                     seen.add(norad_id)
                     satellites.append(sat)
-    return satellites, any_success
+
+    if any_success:
+        return satellites, "live", None
+
+    # Live fetch failed entirely — fall back to the cached snapshot.
+    cached_active, _, cached_at = _load_satellite_cache()
+    if cached_active:
+        print(f"[nasa_api] CelesTrak unreachable live; using cached "
+              f"snapshot from {cached_at}", flush=True)
+        return cached_active, "cached", cached_at
+
+    return [], "unavailable", None
 
 
 def fetch_satellites(group="active"):

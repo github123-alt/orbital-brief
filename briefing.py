@@ -130,20 +130,22 @@ def build_eonet_section():
 
 
 def build_satellite_section():
-    active, active_reachable = fetch_satellites_with_status(group="active")
+    active, status, cached_at = fetch_satellites_with_status(group="active")
 
-    if not active_reachable:
+    if status == "unavailable":
         return (
             "SATELLITES: Catalog temporarily unavailable — CelesTrak "
-            "could not be reached from this server (a network-level "
-            "restriction on this hosting provider, not a data problem). "
-            "Other sections are unaffected."
+            "could not be reached from this server, and no cached "
+            "snapshot is available yet. Other sections are unaffected."
         )
 
     decayed = fetch_decayed_satellites()
     result = summarize_satellite_catalog(active, decayed, classify_orbit_type)
 
     lines = [f"SATELLITES: {result['summary']}"]
+    if status == "cached":
+        lines.append(f"  (Live catalog unreachable — showing cached data "
+                     f"from {cached_at})")
 
     # Orbit breakdown
     orbit_detail = ", ".join(
