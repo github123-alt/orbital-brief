@@ -33,13 +33,20 @@ def _translate_chunk(text: str, target_lang: str, timeout: int = 8) -> str:
             params={"q": text, "langpair": f"en|{target_lang}"},
             timeout=timeout,
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            print(f"[translate] MyMemory returned HTTP {resp.status_code}: "
+                  f"{resp.text[:200]}", flush=True)
+            return text
         data = resp.json()
         translated = data.get("responseData", {}).get("translatedText")
-        if translated and data.get("responseStatus") == 200:
+        status = data.get("responseStatus")
+        if translated and status == 200:
             return translated
-    except Exception:
-        pass
+        print(f"[translate] MyMemory responseStatus={status}, "
+              f"details={data.get('responseDetails')}", flush=True)
+    except Exception as e:
+        print(f"[translate] MyMemory request failed: "
+              f"{type(e).__name__}: {e}", flush=True)
     return text
 
 
