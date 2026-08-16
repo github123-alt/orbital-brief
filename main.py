@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from briefing import generate_briefing
 from ask import ask as ask_flight_director
+from translate import translate_text
 
 app = FastAPI(
     title="Orbital Brief API",
@@ -51,9 +52,13 @@ app.add_middleware(
 # generate_briefing() hits 5 external APIs + an LLM call — expensive to run
 # on every request. Cache it for CACHE_TTL_SECONDS so multiple app opens in
 # the same window don't re-fetch everything.
+#
+# Translations are cached per-language too, since translating the full
+# briefing means dozens of calls to the translation API — worth avoiding
+# on every request for the same day's content.
 # ---------------------------------------------------------------------------
 CACHE_TTL_SECONDS = 15 * 60  # 15 minutes
-_cache = {"date": None, "text": None, "timestamp": 0.0}
+_cache = {"date": None, "text": None, "timestamp": 0.0, "translations": {}}
 
 
 class AskRequest(BaseModel):
@@ -86,12 +91,18 @@ def health():
 
 
 @app.get("/briefing", response_model=BriefingResponse)
-def get_briefing(force_refresh: bool = False):
+def get_briefing(force_refresh: bool = False, lang: str = "en"):
     """
     Returns today's full space operations briefing.
 
     Cached for CACHE_TTL_SECONDS to avoid hammering NASA/watsonx APIs.
     Pass ?force_refresh=true to bypass the cache.
+
+    Pass ?lang=<code> (e.g. "ne", "hi", "es") to get a translated version,
+    via a free translation API. Translations are cached per-language
+    alongside the English source, so repeated requests in the same
+    language are fast after the first one. If translation fails for any
+    reason, falls back to English rather than erroring.
     """
     today = date.today().isoformat()
     now = time.time()
@@ -101,27 +112,41 @@ def get_briefing(force_refresh: bool = False):
         and (now - _cache["timestamp"]) < CACHE_TTL_SECONDS
     )
 
-    if cache_is_fresh and not force_refresh:
-        return BriefingResponse(date=today, briefing=_cache["text"], cached=True)
+    if not cache_is_fresh or force_refresh:
+        try:
+            text = generate_briefing()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to generate briefing: {e}")
 
-    try:
-        text = generate_briefing()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to generate briefing: {e}")
+        _cache["date"] = today
+        _cache["text"] = text
+        _cache["timestamp"] = now
+        _cache["translations"] = {}  # new English content invalidates old translations
+        cached_flag = False
+    else:
+        text = _cache["text"]
+        cached_flag = True
 
-    _cache["date"] = today
-    _cache["text"] = text
-    _cache["timestamp"] = now
+    if lang == "en":
+        return BriefingResponse(date=today, briefing=text, cached=cached_flag)
 
-    return BriefingResponse(date=today, briefing=text, cached=False)
+    translated = _cache["translations"].get(lang)
+    if translated is None:
+        translated = translate_text(text, lang)
+        _cache["translations"][lang] = translated
+
+    return BriefingResponse(date=today, briefing=translated, cached=cached_flag)
 
 
 @app.post("/ask", response_model=AskResponse)
-def post_ask(req: AskRequest):
+def post_ask(req: AskRequest, lang: str = "en"):
     """
     Ask a plain-English question about current space conditions.
     Always fetches fresh live data (not cached) since answers depend on
     the exact question asked.
+
+    Pass ?lang=<code> to get the answer translated. Not cached (each
+    question is different), so translation happens fresh every time.
     """
     if not req.question or not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -130,6 +155,9 @@ def post_ask(req: AskRequest):
         answer = ask_flight_director(req.question)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to answer question: {e}")
+
+    if lang != "en":
+        answer = translate_text(answer, lang)
 
     return AskResponse(question=req.question, answer=answer)
 
