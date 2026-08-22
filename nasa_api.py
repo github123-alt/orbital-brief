@@ -15,9 +15,17 @@ CelesTrak and JPL Horizons require no API key.
 
 import os
 import json
+import time
 import requests
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# The lon/lat region table lives in significance.py alongside the other
+# classification tables, and is shared: it names the FIRMS regional breakdown
+# below and also places the EARTH EVENTS storms and icebergs whose titles carry
+# no location. One table, two callers, no geocoding service needed.
+# Safe as a module-level import — significance imports nothing from here.
+from significance import region_for_coordinates
 
 # Path to a cached snapshot of CelesTrak data, kept fresh by a scheduled
 # GitHub Action (see .github/workflows/update-satellite-cache.yml) since
@@ -162,8 +170,7 @@ def fetch_eonet_events(days_back=7, status="open"):
 
 def count_eonet_by_category(events):
     """
-    Helper: turn a raw EONET events list into a {category: count} dict,
-    ready for significance.summarize_eonet_events().
+    Helper: turn a raw EONET events list into a {category: count} dict.
     """
     counts = {}
     for event in events:
@@ -171,6 +178,183 @@ def count_eonet_by_category(events):
             name = category.get("title", "Unknown")
             counts[name] = counts.get(name, 0) + 1
     return counts
+
+
+# ---------------------------------------------------------------------------
+# NASA FIRMS — actual satellite fire detections
+# ---------------------------------------------------------------------------
+#
+# EONET, above, is a curated catalogue of *named* events, and its only wildfire
+# source reports US incidents. FIRMS is the opposite: a raw detection feed,
+# global, where every row is a satellite pixel measured as burning. It is what
+# answers "how much can actually be seen from space".
+FIRMS_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
+
+# One satellite on purpose. NOAA-20 and Suomi-NPP pass over the same fire a
+# couple of hours apart, so querying both would roughly double the count
+# without detecting anything extra.
+FIRMS_SOURCE = "VIIRS_NOAA20_NRT"
+FIRMS_SOURCE_LABEL = "VIIRS/NOAA-20, 375 m pixels"
+
+# A global two-day request measured at 197,862 rows. This is a backstop against
+# a runaway or malformed response, not an expected limit, which is why exceeding
+# it is treated as a failure rather than reported as a smaller number — and why
+# it sits well clear of a peak fire season rather than at 2x a quiet-season
+# measurement, where a busy August could blank the section for no good reason.
+FIRMS_MAX_ROWS = 750_000
+
+# Matches _ELEMENTS_TTL in main.py. VIIRS gives roughly two overpasses a day so
+# an hour of staleness costs nothing, and unlike the satellite catalog this
+# response is several megabytes — far too big to re-download on every briefing
+# refresh. (Contrast fetch_catalog() in briefing.py, which is deliberately not
+# memoised because it is cheap once cached on disk.)
+_FIRMS_TTL = 60 * 60
+_firms_cache = {"payload": None, "timestamp": 0.0}
+
+
+def fetch_firms_fire_activity(day_range=2, source=FIRMS_SOURCE):
+    """
+    Count active fire detections worldwide from NASA FIRMS, for the most recent
+    COMPLETE UTC day.
+
+    One VIIRS detection is a ~375 m pixel, not a fire, so a single large fire
+    produces hundreds of rows. The count is therefore detections rather than
+    fires, and summarize_earth_events() says exactly that in the output.
+
+    Why two days and not one: FIRMS delimits by `acq_date`, and day_range=1
+    returns the UTC day *in progress*. That count climbs all day, so the same
+    unchanged planet reads 90,941 at one hour and 106,921 at another —
+    measured, not assumed. Asking for two days and reporting the older one
+    gives a stable figure that is comparable from one briefing to the next.
+    Rows are bucketed per date while streaming, so this costs one extra day of
+    download and no extra memory.
+
+    Requires the FIRMS_MAP_KEY environment variable — free, from
+    https://firms.modaps.eosdis.nasa.gov/api/map_key/. Returns None rather
+    than raising if the key is missing or anything fails, so the briefing still
+    renders without it. Deliberately NOT an import-time check like NASA_API_KEY
+    above: an unset key here should cost one section, not the whole service.
+
+    SECURITY: the key is embedded in the request PATH, which makes the URL
+    itself a secret. Nothing here logs the URL, and the exception handler
+    prints only the exception *type* — `requests` puts the full URL into its
+    exception strings, so printing the exception would leak the key into
+    Render's logs. Same rule as the redaction in iss_passes.py.
+
+    The response is streamed and counted line by line. Only counters
+    accumulate, so memory stays flat regardless of how many detections there
+    are; loading a 200,000-row CSV into a list would not.
+
+    Args:
+        day_range (int): days of data to request, 1-5. Needs to be at least 2
+            for a complete day to be isolable; 1 falls back to the partial
+            current day with partial=True set.
+        source (str): FIRMS satellite source id.
+
+    Returns:
+        dict with keys total, by_region, date, partial, label, source —
+        or None if the feed was unavailable.
+    """
+    key = os.environ.get("FIRMS_MAP_KEY")
+    if not key:
+        print("[nasa_api] FIRMS_MAP_KEY not set; skipping fire-detection count",
+              flush=True)
+        return None
+
+    now = time.time()
+    if (_firms_cache["payload"] is not None
+            and (now - _firms_cache["timestamp"]) < _FIRMS_TTL):
+        return _firms_cache["payload"]
+
+    seen = 0
+    by_date = {}
+    lat_i = lon_i = date_i = None
+
+    try:
+        with requests.get(
+            f"{FIRMS_URL}/{key}/{source}/world/{day_range}",
+            stream=True,
+            timeout=(10, 120),
+        ) as response:
+            response.raise_for_status()
+
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+
+                if lat_i is None:
+                    columns = [c.strip().lower() for c in line.split(",")]
+                    missing = [c for c in ("latitude", "longitude", "acq_date")
+                               if c not in columns]
+                    if missing:
+                        # Not a fire CSV: an invalid-key or over-quota message,
+                        # or an HTML error page. The body is deliberately not
+                        # printed, since an error page can echo the request URL
+                        # — and the URL contains the key.
+                        print("[nasa_api] FIRMS returned an unexpected response "
+                              f"(missing {', '.join(missing)}); check FIRMS_MAP_KEY",
+                              flush=True)
+                        return None
+                    # Indexed by name, not position: FIRMS has changed column
+                    # order between releases.
+                    lat_i = columns.index("latitude")
+                    lon_i = columns.index("longitude")
+                    date_i = columns.index("acq_date")
+                    continue
+
+                if seen >= FIRMS_MAX_ROWS:
+                    # Rows are not guaranteed to be grouped by date, so a
+                    # truncated stream would undercount whichever day we then
+                    # picked. An honest gap beats a plausible wrong number.
+                    print(f"[nasa_api] FIRMS response exceeded {FIRMS_MAX_ROWS:,} "
+                          "rows; discarding rather than reporting a partial count",
+                          flush=True)
+                    return None
+
+                fields = line.split(",")
+                if len(fields) <= max(lat_i, lon_i, date_i):
+                    continue
+                seen += 1
+
+                bucket = by_date.setdefault(fields[date_i].strip(),
+                                            {"total": 0, "regions": {}})
+                bucket["total"] += 1
+                region = region_for_coordinates(fields[lon_i], fields[lat_i])
+                if region:
+                    bucket["regions"][region] = bucket["regions"].get(region, 0) + 1
+
+    except Exception as e:
+        # Type only — never the exception text. See SECURITY above.
+        print(f"[nasa_api] FIRMS request failed: {type(e).__name__}", flush=True)
+        return None
+
+    if lat_i is None:
+        print("[nasa_api] FIRMS returned an empty response", flush=True)
+        return None
+    if not by_date:
+        print("[nasa_api] FIRMS returned a header but no detections", flush=True)
+        return None
+
+    # Sorted rather than compared against today's UTC date: if this server's
+    # clock and FIRMS' processing ever disagree about the date, "the day before
+    # the newest one present" is still the right answer.
+    dates = sorted(by_date)
+    chosen = dates[-2] if len(dates) >= 2 else dates[-1]
+    bucket = by_date[chosen]
+
+    payload = {
+        "total": bucket["total"],
+        "by_region": bucket["regions"],
+        "date": chosen,
+        # True when only one date came back, so the caller can say "so far
+        # today" instead of implying a full day was counted.
+        "partial": len(dates) < 2,
+        "label": FIRMS_SOURCE_LABEL if source == FIRMS_SOURCE else source,
+        "source": source,
+    }
+    _firms_cache["payload"] = payload
+    _firms_cache["timestamp"] = now
+    return payload
 
 
 # NOTE: previously hardcoded to http:// based on earlier local debugging.

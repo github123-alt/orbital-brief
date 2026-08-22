@@ -7,6 +7,8 @@ grounded in real NOAA/NASA operational thresholds.
 """
 
 import re
+from collections import Counter
+from datetime import datetime, timezone
 
 
 # ---------------------------------------------------------------------------
@@ -257,27 +259,487 @@ def summarize_satellite_catalog(active_sats, decayed_sats, orbit_classifier):
 
 
 # ---------------------------------------------------------------------------
-# EONET (Earth Observatory Natural Event Tracker)
+# EONET (Earth Observatory Natural Event Tracker) + FIRMS fire detections
 # ---------------------------------------------------------------------------
+#
+# What this section is careful about, and why.
+#
+# EONET is a *curated catalogue of named events*, not a detection feed, and
+# its shape is lopsided in ways that made the old one-line summary actively
+# misleading. Measured against 1,571 open events:
+#
+#   - 1,532 of them come from IRWIN, the US interagency fire reporting
+#     system. There is no international wildfire source in EONET at all, so
+#     an EONET wildfire count is a US incident count and nothing more.
+#   - IRWIN files each fire once and never updates it (one geometry point).
+#     Since EONET's `days` filter matches an event's MOST RECENT observation,
+#     a fire reported three weeks ago drops out of a 7-day query while it is
+#     still burning.
+#   - The same feed carries deliberate prescribed burns alongside genuine
+#     wildfires, so counting the category wholesale overstates how much is
+#     burning out of control.
+#   - "Open" is not "active": one tracked iceberg started drifting 5,471 days
+#     ago. Anything honest has to report *started* and *last observed*
+#     separately rather than collapsing them into "active".
+#
+# So the real "what can be seen from space" number comes from FIRMS, which is
+# an actual satellite detection feed, and EONET is used for what it is good
+# at: named events with a place and a history.
 
-def summarize_eonet_events(events_by_category):
+RECENT_DAYS = 7            # what "reported recently" means in the rollup
+MAX_CYCLONES_LISTED = 3
+MAX_WILDFIRES_LISTED = 3
+MAX_VOLCANOES_LISTED = 2
+
+# EONET source ids we need to reason about by name.
+IRWIN_SOURCE = "IRWIN"                      # US-only, one report per fire
+CYCLONE_SOURCES = {"JTWC", "NOAA_NHC"}      # properly tracked, many fixes
+
+# Singular / plural labels per event kind. "wildfire incident" rather than
+# "wildfire" is deliberate: IRWIN files incidents, and the distinction is the
+# whole point of this section.
+KIND_LABELS = {
+    "wildfire":         ("wildfire incident", "wildfire incidents"),
+    "prescribed burn":  ("prescribed burn", "prescribed burns"),
+    "tropical cyclone": ("tropical cyclone", "tropical cyclones"),
+    "severe storm":     ("severe storm", "severe storms"),
+    "volcano":          ("volcano", "volcanoes"),
+    "iceberg":          ("iceberg", "icebergs"),
+}
+
+# Ordered lon/lat boxes as (name, west, south, east, north). First match wins,
+# so more specific regions precede broader ones and all land precedes the
+# ocean fallbacks. Same idea as SHELL_BANDS in starlink.py.
+#
+# These serve two callers at once, which is why no reverse-geocoding service
+# is needed: they name the FIRMS regional breakdown, and they supply a place
+# for the EONET events whose titles carry none (storms and icebergs).
+#
+# The Pacific is split into two boxes either side of the dateline rather than
+# adding longitude-wrapping logic to the lookup.
+REGION_BOXES = [
+    ("Greenland",                          -73,  59,  -12,  84),
+    ("Central America & the Caribbean",   -118,   7,  -58,  25),
+    ("western North America",             -170,  25, -100,  72),
+    ("eastern North America",             -100,  25,  -50,  72),
+    ("the Amazon basin",                   -78, -15,  -44,   5),
+    ("northern South America",             -82,   0,  -34,  13),
+    ("southern South America",             -78, -56,  -34,   0),
+    ("Europe",                             -12,  36,   40,  72),
+    ("the Middle East",                     34,  12,   63,  42),
+    ("north Africa & the Sahel",           -18,  10,   52,  37),
+    ("central Africa",                     -18,  -6,   52,  10),
+    ("southern Africa",                      8, -36,   52,  -6),
+    ("Siberia & the Russian Far East",      60,  50,  180,  78),
+    ("central Asia",                        45,  36,   90,  56),
+    ("south Asia",                          60,   5,   92,  37),
+    ("Southeast Asia",                      92, -11,  142,  29),
+    ("east Asia",                          100,  20,  146,  54),
+    ("Australia",                          112, -44,  154, -10),
+    ("New Zealand & the southwest Pacific", 154, -50, 180, -10),
+    ("the Arctic",                        -180,  66,  180,  90),
+    ("the Antarctic",                     -180, -90,  180, -60),
+    ("the Southern Ocean",                -180, -60,  180, -45),
+    ("the North Atlantic",                 -80,   5,    0,  66),
+    ("the South Atlantic",                 -70, -60,   20,   5),
+    ("the Indian Ocean",                    20, -60,  100,  30),
+    ("the North Pacific",                  120,   5,  180,  66),
+    ("the North Pacific",                 -180,   5,  -80,  66),
+    ("the South Pacific",                  120, -60,  180,   5),
+    ("the South Pacific",                 -180, -60,  -70,   5),
+]
+
+
+def region_for_coordinates(lon, lat):
     """
-    Summarize EONET open events by category into a plain-language line.
+    Name the region a lon/lat falls in, or None if the pair is unusable.
 
-    Args:
-        events_by_category (dict): e.g. {"Wildfires": 12, "Severe Storms": 3, "Volcanoes": 2}
+    Public because nasa_api.fetch_firms_fire_activity() buckets fire detections
+    with it — the same boxes that place the storms and icebergs here.
+    """
+    try:
+        lon, lat = float(lon), float(lat)
+    except (TypeError, ValueError):
+        return None
+    if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
+        return None
+    for name, west, south, east, north in REGION_BOXES:
+        if west <= lon <= east and south <= lat <= north:
+            return name
+    return "open ocean"
+
+
+def _coordinates_of(point):
+    """
+    Pull a (lon, lat) pair out of one EONET geometry entry.
+
+    Point geometries are a flat [lon, lat]; Polygon and MultiPolygon nest that
+    one or two levels deeper. Walking down to the first vertex is precise
+    enough to name a region, and avoids a centroid calculation that would add
+    nothing at this resolution. Returns None on anything unrecognised.
+    """
+    node = (point or {}).get("coordinates")
+    for _ in range(4):
+        if not isinstance(node, (list, tuple)) or not node:
+            return None
+        if not isinstance(node[0], (list, tuple)):
+            break
+        node = node[0]
+    if not isinstance(node, (list, tuple)) or len(node) < 2:
+        return None
+    try:
+        return float(node[0]), float(node[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _age_days(iso, now):
+    """Whole days between an EONET date string and `now`, or None."""
+    if not iso:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return max(0, (now - stamp).days)
+
+
+def _format_age(days):
+    """A duration phrase for an age in days: '3 days', '2 months', '4.2 years'."""
+    if days is None:
+        return None
+    if days <= 0:
+        return "less than a day"
+    if days == 1:
+        return "1 day"
+    if days < 31:
+        return f"{days} days"
+    if days < 365:
+        months = max(1, round(days / 30.44))
+        return f"{months} month{'s' if months != 1 else ''}"
+    years = days / 365.25
+    return f"{years:.1f} years" if years < 10 else f"{round(years)} years"
+
+
+def _format_when(days):
+    """A point in the past: 'today' / '3 days ago' / '2 months ago'."""
+    if days is None:
+        return None
+    return "today" if days <= 0 else f"{_format_age(days)} ago"
+
+
+def _format_utc_date(iso):
+    """'2026-08-21' -> '21 Aug'. Returns None if it isn't a date we recognise."""
+    try:
+        return datetime.strptime(str(iso), "%Y-%m-%d").strftime("%d %b").lstrip("0")
+    except (TypeError, ValueError):
+        return None
+
+
+def _kind_for(category, title, sources):
+    """
+    Map an EONET category onto the kind of thing we actually want to report.
+
+    Keyed on EONET's own category taxonomy rather than on source ids, so a new
+    source feeding an existing category needs no change here.
+    """
+    cat = (category or "").strip()
+    if cat == "Wildfires":
+        # A prescribed burn is a deliberate, planned fire. IRWIN files them in
+        # the same feed as wildfires, so without this split the section would
+        # report controlled forestry work as uncontrolled burning.
+        return "prescribed burn" if "prescribed" in title.lower() else "wildfire"
+    if cat == "Severe Storms":
+        return "tropical cyclone" if sources & CYCLONE_SOURCES else "severe storm"
+    if cat == "Volcanoes":
+        return "volcano"
+    if cat in ("Sea and Lake Ice", "Icebergs"):
+        return "iceberg"
+    if not cat:
+        return "other"
+    return cat[:-1].lower() if cat.endswith("s") else cat.lower()
+
+
+def _place_for(title, sources, lon, lat):
+    """
+    Where the event is, in words.
+
+    One rule with two branches, so an unfamiliar source still produces
+    something sensible. Every EONET title that carries a location puts it
+    after the first comma — 'Wildfire Windmill, Stillwater, Montana' or
+    'Nevados del Chillan Volcano, Chile' — which covers 1,547 of 1,571 open
+    events. The rest (storms, icebergs) carry no place in the title at all
+    and are named from their coordinates instead.
+    """
+    if "," in title:
+        place = title.split(",", 1)[1].strip()
+        if place:
+            # IRWIN reports US incidents only, so its titles stop at the
+            # state and the country is safe to add.
+            if IRWIN_SOURCE in sources and not place.upper().endswith("USA"):
+                place += ", USA"
+            return place
+    return region_for_coordinates(lon, lat)
+
+
+def _short_name(title):
+    """
+    Trim an EONET title down to the distinguishing part.
+
+    The category is already stated by the group heading, so 'Wildfire
+    Windmill, Stillwater, Montana' only needs to contribute 'Windmill'.
+    """
+    name = title.split(",", 1)[0].strip()
+    # 'Incident Complex ' first: it is longer than 'Wildfire ' and EONET uses it
+    # for merged fires, which otherwise read as 'Incident Complex ROWE CREEK
+    # COMPLEX'.
+    for prefix in ("Incident Complex ", "Wildfire ", "Iceberg "):
+        if name.startswith(prefix):
+            name = name[len(prefix):].strip()
+            break
+    if name.endswith(" Volcano"):
+        name = name[:-len(" Volcano")].strip()
+    return name or title
+
+
+def _magnitude_of(point):
+    """
+    Format one geometry point's magnitude, or None if it has none.
+
+    Returns the numeric value too, since wildfires and icebergs are ranked by
+    it. Units come straight from EONET: acres for fires, kts for cyclones,
+    NM^2 for icebergs.
+    """
+    value = (point or {}).get("magnitudeValue")
+    if value is None:
+        return None, None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None, None
+    unit = ((point or {}).get("magnitudeUnit") or "").strip()
+    pretty = {"kts": "kt winds", "NM^2": "NM²"}.get(unit, unit)
+    shown = f"{value:,.0f}" if value >= 100 else f"{value:g}"
+    return f"{shown} {pretty}".strip(), value
+
+
+def describe_earth_event(event, now=None):
+    """
+    Reduce one raw EONET event to the fields the briefing needs.
+
+    Returns None rather than raising, so one malformed record cannot take the
+    whole section down with it.
 
     Returns:
-        str: plain-language summary sentence
+        dict with keys: name, kind, place, magnitude, magnitude_value,
+        started_days, last_seen_days, points
     """
-    if not events_by_category:
-        return "No significant Earth events currently being tracked."
+    if not isinstance(event, dict):
+        return None
+    title = (event.get("title") or "").strip()
+    if not title:
+        return None
 
-    parts = [f"{count} active {category.lower()}" for category, count in events_by_category.items() if count > 0]
-    if not parts:
-        return "No significant Earth events currently being tracked."
+    now = now or datetime.now(timezone.utc)
+    geometry = [g for g in (event.get("geometry") or []) if isinstance(g, dict)]
+    first = geometry[0] if geometry else {}
+    last = geometry[-1] if geometry else {}
 
-    return "Currently tracking: " + ", ".join(parts) + "."
+    sources = {(s.get("id") or "").upper()
+               for s in (event.get("sources") or []) if isinstance(s, dict)}
+    categories = [c.get("title") or ""
+                  for c in (event.get("categories") or []) if isinstance(c, dict)]
+
+    coords = _coordinates_of(last) or _coordinates_of(first)
+    lon, lat = coords if coords else (None, None)
+    magnitude, magnitude_value = _magnitude_of(last)
+
+    return {
+        "name":            _short_name(title),
+        "kind":            _kind_for(categories[0] if categories else "", title, sources),
+        "place":           _place_for(title, sources, lon, lat),
+        "magnitude":       magnitude,
+        "magnitude_value": magnitude_value,
+        "started_days":    _age_days(first.get("date"), now),
+        "last_seen_days":  _age_days(last.get("date"), now),
+        "points":          len(geometry),
+    }
+
+
+def _describe_timing(event):
+    """
+    How long it has been going, reporting *started* and *last observed*
+    separately.
+
+    A single-observation event cannot distinguish "burning for three weeks"
+    from "filed once and never updated", so it says 'reported' rather than
+    implying anyone has looked since.
+    """
+    started = _format_when(event["started_days"])
+    seen = _format_when(event["last_seen_days"])
+    if event["points"] <= 1:
+        return f"reported {started}" if started else None
+    if not started:
+        return f"last seen {seen}" if seen else None
+    if event["started_days"] == event["last_seen_days"]:
+        return f"started {started}"
+    return f"started {started}, last seen {seen}"
+
+
+def _event_line(event):
+    """One indented detail line: name — place · magnitude · timing."""
+    text = event["name"]
+    if event["place"]:
+        text += f" — {event['place']}"
+    trailing = [bit for bit in (event["magnitude"], _describe_timing(event)) if bit]
+    return text + (" · " + " · ".join(trailing) if trailing else "")
+
+
+def _plural(kind, count):
+    singular, plural = KIND_LABELS.get(kind, (kind, f"{kind}s"))
+    return singular if count == 1 else plural
+
+
+def _listing(events, heading, limit, sort_key, lines):
+    """Append a bounded group of detail lines, saying so when it truncates."""
+    if not events:
+        return
+    ordered = sorted(events, key=sort_key)
+    hidden = len(ordered) - limit
+    if hidden > 0:
+        heading += f" — {limit} of {len(ordered)}"
+    lines.append(f"  {heading}:")
+    for event in ordered[:limit]:
+        lines.append(f"    {_event_line(event)}")
+
+
+def summarize_earth_events(events, firms=None, now=None):
+    """
+    Build the EARTH EVENTS briefing section from EONET events plus, when
+    available, a FIRMS satellite fire-detection count.
+
+    Replaces the old summarize_eonet_events(), which reported raw EONET
+    category counts as "12 active wildfires" — a number that actually meant
+    "12 US fire incidents filed in the last week" and read as though only
+    twelve fires were burning on Earth.
+
+    The title line is unindented ALL-CAPS with a colon and every other line is
+    indented, which is what the app's parser uses to split sections apart (see
+    ParsedBriefing.parse). An unindented body line would be read as the start
+    of a new section and would silently produce a spurious tile.
+
+    Args:
+        events (list): raw EONET event dicts, from fetch_eonet_events()
+        firms (dict|None): fetch_firms_fire_activity() output, or None if the
+            fire-detection feed was unavailable
+        now (datetime|None): reference time, for testing
+
+    Returns:
+        str: multi-line briefing section
+    """
+    now = now or datetime.now(timezone.utc)
+    described = [d for d in (describe_earth_event(e, now) for e in events or []) if d]
+
+    hotspots = (firms or {}).get("total")
+    fire_date = _format_utc_date((firms or {}).get("date"))
+    fire_partial = bool((firms or {}).get("partial"))
+
+    # A complete UTC day is comparable between briefings; a partial one is not,
+    # so the wording changes rather than presenting them as the same thing.
+    if fire_partial:
+        span = f"so far on {fire_date} (UTC)" if fire_date else "so far today"
+    else:
+        span = f"on {fire_date} (UTC)" if fire_date else "in the last full day"
+
+    if hotspots:
+        headline = (f"{hotspots:,} active fire pixels detected worldwide {span}, "
+                    f"plus {len(described)} named events tracked.")
+    elif described:
+        headline = f"{len(described)} named events currently being tracked."
+    else:
+        headline = "No named events currently being tracked, and no fire detections available."
+
+    lines = [f"EARTH EVENTS (from orbit): {headline}"]
+
+    # ── What satellites actually detected ─────────────────────────────────
+    if hotspots:
+        label = firms.get("label", "VIIRS")
+        if fire_partial and fire_date:
+            coverage = (f"{hotspots:,} hotspots so far on {fire_date} — a partial "
+                        f"UTC day, still filling up.")
+        elif fire_date:
+            coverage = (f"{hotspots:,} hotspots on {fire_date}, the last complete "
+                        f"UTC day.")
+        else:
+            coverage = f"{hotspots:,} hotspots."
+        lines.append(f"  Satellite fire detection ({label}): {coverage}")
+        busiest = sorted((firms.get("by_region") or {}).items(),
+                         key=lambda item: -item[1])[:3]
+        if busiest:
+            lines.append("    Most active: "
+                         + " · ".join(f"{name} {count:,}" for name, count in busiest)
+                         + ".")
+    else:
+        lines.append("  Satellite fire detection: unavailable right now "
+                     "(NASA FIRMS could not be reached).")
+
+    if not described:
+        return "\n".join(lines)
+
+    # ── The named-event catalogue ─────────────────────────────────────────
+    counts = Counter(d["kind"] for d in described)
+    recent = sum(1 for d in described
+                 if d["last_seen_days"] is not None
+                 and d["last_seen_days"] <= RECENT_DAYS)
+    rollup = ", ".join(f"{count} {_plural(kind, count)}"
+                       for kind, count in counts.most_common())
+    lines.append(f"  Named events open in NASA's catalogue: {rollup} "
+                 f"({recent} reported in the last {RECENT_DAYS} days).")
+
+    # Sort keys: cyclones and volcanoes by most recently observed, fires and
+    # icebergs by size. None sorts last in both cases.
+    by_recency = lambda d: (d["last_seen_days"] is None, d["last_seen_days"] or 0)
+    by_size = lambda d: -(d["magnitude_value"] or 0)
+
+    _listing([d for d in described if d["kind"] in ("tropical cyclone", "severe storm")],
+             "Tropical cyclones (JTWC / NOAA hurricane centres — continuously tracked)",
+             MAX_CYCLONES_LISTED, by_recency, lines)
+
+    _listing([d for d in described if d["kind"] == "wildfire"],
+             "Largest fire incidents (US interagency reports — this catalogue is US-only)",
+             MAX_WILDFIRES_LISTED, by_size, lines)
+
+    _listing([d for d in described if d["kind"] == "volcano"],
+             "Volcanic activity", MAX_VOLCANOES_LISTED, by_recency, lines)
+
+    bergs = [d for d in described if d["kind"] == "iceberg"]
+    if bergs:
+        biggest = max(bergs, key=lambda d: d["magnitude_value"] or 0)
+        detail = ", ".join(bit for bit in (biggest["place"], biggest["magnitude"],
+                                           _describe_timing(biggest)) if bit)
+        lines.append(f"  Drifting icebergs: {len(bergs)} tracked, largest "
+                     f"{biggest['name']} ({detail}).")
+
+    # Prescribed burns stay counted in the rollup above so the categories still
+    # sum to the headline total; the gloss explaining what they are rides along
+    # on the closing paragraph rather than costing a line of its own.
+    hint = ("  How to read this: the hotspot count is what satellites actually saw — one "
+            "pixel is a 375 m patch that was burning, so a single large fire can produce "
+            "hundreds of them.")
+    if counts.get("prescribed burn"):
+        hint += (" Prescribed burns are deliberate, planned fires — not fires burning out "
+                 "of control, though EONET files both together.")
+    lines.append(hint)
+
+    lines.append("  The named-event list is NASA's hand-curated catalogue, which is a different "
+                 "thing: its only wildfire source files US incidents once and never updates "
+                 "them, so fires elsewhere never appear there. That is why it lists a handful "
+                 "while the satellites see thousands, and why each entry says when it was last "
+                 "observed rather than claiming it is still burning.")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -467,8 +929,12 @@ REENTRY_ALERT_THRESHOLD = 100
 
 def detect_alerts(section_map: dict) -> list:
     """
-    Scan all briefing sections for conditions that cross operational thresholds
+    Scan the briefing sections for conditions that cross operational thresholds
     and return a list of plain-English alert strings.
+
+    Every check reads only the one section that owns its reading, never the
+    sections joined together — see the comment in the body for the false
+    alerts that scanning everything produced.
 
     These alerts are passed to the AI narrative so Granite focuses on what
     actually needs attention, not just routine conditions.
@@ -488,23 +954,42 @@ def detect_alerts(section_map: dict) -> list:
         list of str — one alert per triggered threshold, empty if all clear.
     """
     alerts = []
-    text = " ".join(section_map.values()).upper()
+
+    # Each check below reads ONLY the section that owns the reading it looks
+    # for. This used to scan " ".join(section_map.values()), which
+    # mis-escalated on ordinary days, because mission_planner.py writes
+    # multi-scale tokens into its recommendations:
+    #
+    #   - An R3 flare produced the text "R3/R4 flare — HF comms degraded"
+    #     (mission_planner.py:44). R4 is tested before R3, so the briefing
+    #     reported a SEVERE R4 flare that had not happened.
+    #   - "G4/G5 storm" (:46) made every G4 read as a G5 grid-collapse alert.
+    #   - A G4 storm's own "(SEVERE)" label raised a phantom solar flare
+    #     alert with no flare present at all.
+    #
+    # Scoping is also what keeps EARTH EVENTS out of the scan. That section
+    # carries third-party incident names — US counties and fire names — and
+    # any one of them containing "G3" as a substring would raise a false
+    # geomagnetic alert. Same class of bug as the re-entry scan below.
+    flare_text = section_map.get("solar_flares", "").upper()
+    storm_text = section_map.get("geomagnetic", "").upper()
 
     # ── Solar flare severity ───────────────────────────────────────────────
-    # R3 = "Strong" or worse = X-class flare
-    if "R5" in text or "(EXTREME)" in text:
+    # R3 = "Strong" or worse = X-class flare. classify_flare() emits exactly
+    # one clean R0–R5 token, so scoped to its own section these are exact.
+    if "R5" in flare_text or "(EXTREME)" in flare_text:
         alerts.append("EXTREME solar flare detected (R5) — complete HF blackout on sunlit hemisphere; emergency comms may be affected")
-    elif "R4" in text or "(SEVERE)" in text:
+    elif "R4" in flare_text or "(SEVERE)" in flare_text:
         alerts.append("SEVERE solar flare (R4) — widespread HF radio blackout; satellite operators should check radiation dose monitors")
-    elif "R3" in text or "(STRONG)" in text:
+    elif "R3" in flare_text or "(STRONG)" in flare_text:
         alerts.append("STRONG solar flare (R3) — wide-area HF radio blackout likely; GPS accuracy may be degraded")
 
     # ── Geomagnetic storm severity ─────────────────────────────────────────
-    if "G5" in text:
+    if "G5" in storm_text:
         alerts.append("EXTREME geomagnetic storm (G5) — grid collapse risk; all satellites in LEO should enter safe mode")
-    elif "G4" in text:
+    elif "G4" in storm_text:
         alerts.append("SEVERE geomagnetic storm (G4) — widespread voltage control issues; surface charging on spacecraft likely")
-    elif "G3" in text:
+    elif "G3" in storm_text:
         alerts.append("STRONG geomagnetic storm (G3) — satellite drag increase in LEO; attitude control anomalies possible")
 
     # ── Near-Earth Object proximity ────────────────────────────────────────
@@ -560,5 +1045,78 @@ if __name__ == "__main__":
         result = classify_close_approach(dist_km, size)
         print(f"{dist_km:,} km, {size}m: {result['tier']} — {result['description']}")
 
-    print("\n--- EONET Summary Test ---")
-    print(summarize_eonet_events({"Wildfires": 14, "Severe Storms": 2, "Volcanoes": 0}))
+    print("\n--- Earth Events Test ---")
+    # Shapes taken from the live EONET feed: an IRWIN fire (place in the title,
+    # one report only), a JTWC cyclone (no place, many track fixes), and a
+    # prescribed burn that must not be counted as a wildfire.
+    sample_events = [
+        {
+            "title": "Wildfire Windmill, Stillwater, Montana",
+            "categories": [{"title": "Wildfires"}],
+            "sources": [{"id": "IRWIN"}],
+            "geometry": [{"date": "2026-08-19T00:00:00Z", "type": "Point",
+                          "coordinates": [-109.5, 45.4],
+                          "magnitudeValue": 14200, "magnitudeUnit": "acres"}],
+        },
+        {
+            "title": "Prescribed Fire RX Tom Green 7105, Tom Green, Texas",
+            "categories": [{"title": "Wildfires"}],
+            "sources": [{"id": "IRWIN"}],
+            "geometry": [{"date": "2026-08-20T00:00:00Z", "type": "Point",
+                          "coordinates": [-100.4, 31.4],
+                          "magnitudeValue": 560, "magnitudeUnit": "acres"}],
+        },
+        {
+            "title": "Typhoon Saudel",
+            "categories": [{"title": "Severe Storms"}],
+            "sources": [{"id": "JTWC"}],
+            "geometry": [
+                {"date": "2026-08-16T00:00:00Z", "type": "Point",
+                 "coordinates": [130.0, 15.0], "magnitudeValue": 45, "magnitudeUnit": "kts"},
+                {"date": "2026-08-22T00:00:00Z", "type": "Point",
+                 "coordinates": [125.0, 20.0], "magnitudeValue": 105, "magnitudeUnit": "kts"},
+            ],
+        },
+    ]
+    # Pinned so the ages below stay stable as this file gets older — otherwise
+    # "started 6 days ago" silently becomes "3 months ago" and the demo stops
+    # demonstrating anything.
+    demo_now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+
+    print(summarize_earth_events(
+        sample_events,
+        firms={"total": 106921, "date": "2026-08-21", "partial": False,
+               "label": "VIIRS/NOAA-20, 375 m pixels",
+               "by_region": {"southern Africa": 47924,
+                             "Siberia & the Russian Far East": 14595,
+                             "the Amazon basin": 7900}},
+        now=demo_now,
+    ))
+
+    print("\n--- Earth Events with a partial FIRMS day ---")
+    # What we fall back to when only one acq_date came back, so the count is
+    # the UTC day still in progress and must not be presented as a full day.
+    print(summarize_earth_events(
+        sample_events,
+        firms={"total": 90941, "date": "2026-08-22", "partial": True,
+               "label": "VIIRS/NOAA-20, 375 m pixels", "by_region": {}},
+        now=demo_now,
+    ).splitlines()[1])
+
+    print("\n--- Earth Events with FIRMS unavailable ---")
+    print(summarize_earth_events(sample_events, firms=None, now=demo_now))
+
+    print("\n--- Region lookup ---")
+    for lon, lat in [(-109.5, 45.4), (130.0, 20.0), (25.0, -5.0), (-45.0, 70.0), (-150.0, -30.0)]:
+        print(f"  ({lon}, {lat}) -> {region_for_coordinates(lon, lat)}")
+
+    print("\n--- Alert scoping regression ---")
+    # mission_planner.py writes "R3/R4" and "G4/G5" into its section. Scanning
+    # every section joined together reported R4 and G5 here; scoped, this must
+    # report exactly the R3 flare and nothing else.
+    print(detect_alerts({
+        "solar_flares":    "  Most significant: X2.1 class flare — R3 (Strong).",
+        "geomagnetic":     "  Storm starting today: peak Kp=5.0 — G1 (Minor).",
+        "mission_windows": "  R3/R4 flare — HF comms degraded. G4/G5 storm — drag uncertainty.",
+    }))
+

@@ -18,7 +18,7 @@ from nasa_api import (
     fetch_geomagnetic_storms,
     fetch_near_earth_objects,
     fetch_eonet_events,
-    count_eonet_by_category,
+    fetch_firms_fire_activity,
     fetch_satellites,
     fetch_satellites_with_status,
     fetch_decayed_satellites,
@@ -29,7 +29,7 @@ from significance import (
     classify_flare,
     classify_geomagnetic_storm,
     classify_close_approach,
-    summarize_eonet_events,
+    summarize_earth_events,
     summarize_satellite_catalog,
     summarize_deep_space_objects,
     get_lunar_debris_summary,
@@ -123,11 +123,43 @@ def build_neo_section():
     return "\n".join(lines)
 
 
+# EONET's `days` filter matches an event's MOST RECENT observation, not its
+# start, so a narrow window silently drops long-running events that nobody has
+# re-reported lately — a fire logged three weeks ago disappears from a 7-day
+# query while it is still burning. Measured on the live feed: 7 days returns 14
+# events, 90 returns about 400 and is the narrowest window that surfaces
+# volcanoes at all. 365 adds another ~1,100 that are mostly stale (one iceberg
+# last observed years ago) for no new signal.
+#
+# "Reported in the last 7 days" is then derived locally by
+# summarize_earth_events(), so the recent count is still available without
+# making the window itself hide things.
+EONET_WINDOW_DAYS = 90
+
+
 def build_eonet_section():
-    events = fetch_eonet_events(days_back=7, status="open")
-    counts = count_eonet_by_category(events)
-    summary = summarize_eonet_events(counts)
-    return f"EARTH EVENTS (from orbit): {summary}"
+    """
+    EARTH EVENTS: what satellites actually detected, plus named events with a
+    place and a duration.
+
+    Two sources on purpose. EONET is a curated catalogue whose only wildfire
+    source reports US incidents once each and never updates them; FIRMS is a
+    raw global detection feed. Either alone is misleading — see the comment at
+    the top of the EONET block in significance.py.
+
+    Degrades to one source if the other is unavailable, and says which is
+    missing rather than quietly dropping the number.
+    """
+    try:
+        events = fetch_eonet_events(days_back=EONET_WINDOW_DAYS, status="open")
+    except Exception as e:
+        # A 90-day query asks more of EONET than the old 7-day one did, and
+        # this section now has a second source that can carry it, so an EONET
+        # outage costs the named-event list rather than the whole briefing.
+        print(f"[briefing] EONET unavailable: {type(e).__name__}", flush=True)
+        events = []
+
+    return summarize_earth_events(events, firms=fetch_firms_fire_activity())
 
 
 def fetch_catalog():
