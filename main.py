@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from briefing import generate_briefing
 from ask import ask as ask_flight_director
 from translate import translate_text
-from iss_passes import fetch_iss_passes
+from iss_passes import fetch_iss_passes, fetch_iss_position
 
 app = FastAPI(
     title="Orbital Brief API",
@@ -82,7 +82,7 @@ def root():
         "status": "online",
         "endpoints": [
             "/briefing", "/ask", "/history/dates",
-            "/history/{date}", "/iss-passes",
+            "/history/{date}", "/iss-passes", "/iss-position",
         ],
     }
 
@@ -214,3 +214,14 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+@app.get("/iss-position")
+def get_iss_position(lat: float, lon: float):
+    """
+    Where the ISS is right now, plus whether it's above the caller's
+    horizon and in sunlight. Shown when there are no visible passes — the
+    forecast only reaches 10 days ahead, so a quiet window would otherwise
+    leave the screen with nothing on it.
+    """
+    return fetch_iss_position(lat, lon)
