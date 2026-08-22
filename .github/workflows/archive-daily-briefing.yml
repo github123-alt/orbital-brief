@@ -1,0 +1,40 @@
+name: Archive daily briefing
+
+# Runs once a day on GitHub's own servers, generates the day's briefing,
+# and commits it to history/<date>.json — building up a reliable archive
+# that doesn't depend on Render's disk surviving restarts.
+
+on:
+  schedule:
+    - cron: "0 1 * * *"   # ~06:45 NPT (Nepal), once daily
+  workflow_dispatch: {}     # lets you trigger it manually from the
+                             # Actions tab on GitHub, for testing
+
+permissions:
+  contents: write
+
+jobs:
+  archive-briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate and archive today's briefing
+        env:
+          NASA_API_KEY: ${{ secrets.NASA_API_KEY }}
+        run: python archive_daily_briefing.py
+
+      - name: Commit and push if a new archive was created
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add history/
+          git diff --staged --quiet || git commit -m "Archive daily briefing [automated]"
+          git push

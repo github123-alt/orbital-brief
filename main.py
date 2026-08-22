@@ -14,13 +14,10 @@ spacecraft_health.py, and watsonx.py.
 
 Run locally:
     uvicorn main:app --reload --port 8000
-
-Then test:
-    curl http://localhost:8000/briefing
-    curl -X POST http://localhost:8000/ask -H "Content-Type: application/json" -d '{"question": "Is it safe to do a spacewalk today?"}'
 """
 
 import os
+import json
 import time
 from datetime import date, datetime
 
@@ -38,8 +35,6 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Allow the Flutter app (and local dev/testing) to call this API.
-# Tighten allow_origins once you know your app's actual origin / are ready to lock it down.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -59,6 +54,9 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 CACHE_TTL_SECONDS = 15 * 60  # 15 minutes
 _cache = {"date": None, "text": None, "timestamp": 0.0, "translations": {}}
+
+# Where the daily-archive GitHub Action commits past briefings.
+HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history")
 
 
 class AskRequest(BaseModel):
@@ -81,7 +79,7 @@ def root():
     return {
         "service": "Orbital Brief API",
         "status": "online",
-        "endpoints": ["/briefing", "/ask"],
+        "endpoints": ["/briefing", "/ask", "/history/dates", "/history/{date}"],
     }
 
 
@@ -100,9 +98,8 @@ def get_briefing(force_refresh: bool = False, lang: str = "en"):
 
     Pass ?lang=<code> (e.g. "ne", "hi", "es") to get a translated version,
     via a free translation API. Translations are cached per-language
-    alongside the English source, so repeated requests in the same
-    language are fast after the first one. If translation fails for any
-    reason, falls back to English rather than erroring.
+    alongside the English source. If translation fails, falls back to
+    English rather than erroring.
     """
     today = date.today().isoformat()
     now = time.time()
@@ -121,7 +118,7 @@ def get_briefing(force_refresh: bool = False, lang: str = "en"):
         _cache["date"] = today
         _cache["text"] = text
         _cache["timestamp"] = now
-        _cache["translations"] = {}  # new English content invalidates old translations
+        _cache["translations"] = {}
         cached_flag = False
     else:
         text = _cache["text"]
@@ -160,6 +157,42 @@ def post_ask(req: AskRequest, lang: str = "en"):
         answer = translate_text(answer, lang)
 
     return AskResponse(question=req.question, answer=answer)
+
+
+@app.get("/history/dates")
+def get_history_dates():
+    """
+    Lists the dates for which an archived briefing exists (newest first).
+    These are committed to the repo daily by a scheduled GitHub Action —
+    see .github/workflows/archive-daily-briefing.yml.
+    """
+    if not os.path.isdir(HISTORY_DIR):
+        return {"dates": []}
+
+    dates = [
+        f[:-5]  # strip ".json"
+        for f in os.listdir(HISTORY_DIR)
+        if f.endswith(".json")
+    ]
+    dates.sort(reverse=True)
+    return {"dates": dates}
+
+
+@app.get("/history/{date_str}", response_model=BriefingResponse)
+def get_history_briefing(date_str: str):
+    """
+    Returns the archived briefing for a specific past date (YYYY-MM-DD).
+    Read directly from the committed history/<date>.json file — no live
+    API calls, since past conditions are exactly what was archived.
+    """
+    path = os.path.join(HISTORY_DIR, f"{date_str}.json")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"No archived briefing for {date_str}")
+
+    with open(path, "r") as f:
+        data = json.load(f)
+
+    return BriefingResponse(date=data["date"], briefing=data["briefing"], cached=True)
 
 
 if __name__ == "__main__":
