@@ -17,6 +17,7 @@ import requests
 N2YO_API_KEY = os.environ.get("N2YO_API_KEY")
 ISS_NORAD_ID = 25544  # NORAD catalog ID for the ISS (ZARYA)
 EARTH_RADIUS_KM = 6371.0
+MU_EARTH_KM3_S2 = 398600.4418  # Earth's standard gravitational parameter
 
 _MISSING_KEY_MESSAGE = (
     "ISS tracking requires a free N2YO API key. Get one at "
@@ -52,6 +53,31 @@ def _log_redacted(context: str, exc: Exception) -> None:
 def _compass(azimuth: float) -> str:
     """Converts a compass bearing in degrees to a 16-point label."""
     return _COMPASS[int((azimuth % 360) / 22.5 + 0.5) % 16]
+
+
+def _orbital_speed_kmh(altitude_km):
+    """
+    Orbital speed from altitude, via the circular-orbit case of vis-viva:
+    v = sqrt(mu / r).
+
+    An earlier version derived this by differencing two consecutive
+    position samples, which was subtly wrong. N2YO reports sub-satellite
+    latitude and longitude in an Earth-fixed frame, so differencing them
+    gives ground-track speed — Earth's own rotation already subtracted —
+    which came out ~4% under the figure every reference quotes (26,550 vs
+    27,590 km/h).
+
+    Altitude is live telemetry as well, so this still tracks reboosts, and
+    the ISS's eccentricity of ~0.0005 makes the circular assumption good
+    to well under 0.1%.
+    """
+    try:
+        radius_km = EARTH_RADIUS_KM + float(altitude_km)
+        if radius_km <= 0:
+            return None
+        return math.sqrt(MU_EARTH_KM3_S2 / radius_km) * 3600
+    except (TypeError, ValueError):
+        return None
 
 
 def fetch_iss_passes(lat: float, lon: float, alt: float = 0,
@@ -103,43 +129,6 @@ def fetch_iss_passes(lat: float, lon: float, alt: float = 0,
         }
 
 
-def _speed_kmh(first: dict, second: dict):
-    """
-    Orbital speed measured from two consecutive position samples.
-
-    N2YO has no velocity field, so this derives it from the arc actually
-    travelled between the samples at orbital radius. Measuring beats
-    hardcoding ~27,600 km/h: it stays correct through reboosts and any
-    future altitude change.
-
-    Returns None rather than guessing if the samples are unusable.
-    """
-    try:
-        dt = second["timestamp"] - first["timestamp"]
-        if dt <= 0:
-            return None
-
-        lat1 = math.radians(first["satlatitude"])
-        lat2 = math.radians(second["satlatitude"])
-        dlat = lat2 - lat1
-        dlon = math.radians(second["satlongitude"] - first["satlongitude"])
-
-        # Haversine. Handles an antimeridian crossing between samples for
-        # free — sin(dlon/2)**2 is identical for a +0.06° step and the
-        # -359.94° the raw subtraction produces.
-        a = (math.sin(dlat / 2) ** 2
-             + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2)
-        central_angle = 2 * math.asin(min(1.0, math.sqrt(a)))
-
-        mean_alt = (first["sataltitude"] + second["sataltitude"]) / 2
-        distance_km = central_angle * (EARTH_RADIUS_KM + mean_alt)
-        return distance_km / dt * 3600
-    except Exception:
-        # Malformed sample — the caller shows everything else and omits
-        # speed rather than failing the whole response over one number.
-        return None
-
-
 def fetch_iss_position(lat: float, lon: float, alt: float = 0) -> dict:
     """
     Where the ISS is right now, relative to an observer.
@@ -165,10 +154,8 @@ def fetch_iss_position(lat: float, lon: float, alt: float = 0) -> dict:
             "message": _MISSING_KEY_MESSAGE,
         }
 
-    # Two samples, one second apart — the second exists only to measure
-    # speed, since N2YO doesn't report it.
     url = (f"https://api.n2yo.com/rest/v1/satellite/positions/"
-           f"{ISS_NORAD_ID}/{lat}/{lon}/{alt}/2/")
+           f"{ISS_NORAD_ID}/{lat}/{lon}/{alt}/1/")
 
     try:
         resp = requests.get(url, params={"apiKey": N2YO_API_KEY}, timeout=15)
@@ -182,7 +169,7 @@ def fetch_iss_position(lat: float, lon: float, alt: float = 0) -> dict:
             }
 
         now = positions[0]
-        speed = _speed_kmh(now, positions[1]) if len(positions) > 1 else None
+        speed = _orbital_speed_kmh(now.get("sataltitude"))
         azimuth = now.get("azimuth")
 
         return {
