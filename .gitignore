@@ -2,3 +2,9 @@ venv/
 __pycache__/
 *.pyc
 .env
+
+# Unrelated project kept in this working directory. This repo is public and
+# Render deploys from it, so anything committed here is published. Ignored so
+# a stray "git add ." cannot pick it up.
+pcbu-desktop-main/
+pcbu-desktop-main.zip

@@ -19,16 +19,18 @@ Run locally:
 import os
 import json
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from briefing import generate_briefing
 from ask import ask as ask_flight_director
 from translate import translate_text
 from iss_passes import fetch_iss_passes, fetch_iss_position
+from nasa_api import fetch_satellites_with_status, classify_orbit_type
 
 app = FastAPI(
     title="Orbital Brief API",
@@ -42,6 +44,15 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# Added after CORS so CORS stays the outermost layer (Starlette wraps
+# middleware in reverse order of registration).
+#
+# /satellites/elements is ~1.25 MB of JSON — the single largest thing this
+# API serves, by two orders of magnitude. It compresses to roughly a quarter
+# of that, which is the difference between a tolerable and an unreasonable
+# download on mobile data. /briefing benefits too.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ---------------------------------------------------------------------------
 # Simple in-memory cache for the daily briefing.
@@ -58,6 +69,35 @@ _cache = {"date": None, "text": None, "timestamp": 0.0, "translations": {}}
 
 # Where the daily-archive GitHub Action commits past briefings.
 HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history")
+
+# ---------------------------------------------------------------------------
+# Orbital element cache for /satellites/elements.
+#
+# Separate from _cache above because it has nothing to do with the daily
+# briefing and a very different refresh rhythm: the underlying data only
+# changes when the GitHub Action commits a new satellite_cache.json, which is
+# every 6 hours.
+#
+# The TTL is not a nicety. On Render the live CelesTrak fetch always fails,
+# and fetch_satellites_with_status only falls back to the cached snapshot
+# after nine parallel requests have each timed out — about 8 seconds. Without
+# memoisation every single request would pay that, on top of re-trimming
+# 12,000 records. With it, only the first request after a deploy does.
+# ---------------------------------------------------------------------------
+_ELEMENTS_TTL = 60 * 60  # 1 hour
+_elements_cache = {"payload": None, "timestamp": 0.0}
+
+# The elements a position actually requires. MEAN_MOTION fixes the orbit's
+# size, ECCENTRICITY and ARG_OF_PERICENTER its shape and orientation within
+# its plane, INCLINATION and RA_OF_ASC_NODE the plane itself, and MEAN_ANOMALY
+# where along the orbit the object is at EPOCH. Drop any one and the position
+# is unknowable rather than merely imprecise, so a record missing any of them
+# is skipped and counted instead of being emitted with nulls for the app to
+# trip over.
+_REQUIRED_ELEMENTS = (
+    "EPOCH", "MEAN_MOTION", "ECCENTRICITY", "INCLINATION",
+    "RA_OF_ASC_NODE", "ARG_OF_PERICENTER", "MEAN_ANOMALY",
+)
 
 
 class AskRequest(BaseModel):
@@ -83,6 +123,7 @@ def root():
         "endpoints": [
             "/briefing", "/ask", "/history/dates",
             "/history/{date}", "/iss-passes", "/iss-position",
+            "/satellites/elements",
         ],
     }
 
@@ -208,6 +249,140 @@ def get_iss_passes(lat: float, lon: float):
     real-time position).
     """
     return fetch_iss_passes(lat, lon)
+
+
+def _epoch_to_unix(epoch_str):
+    """
+    CelesTrak's EPOCH is an ISO timestamp with no zone suffix — e.g.
+    "2026-08-22T04:22:11.123456" — and it is always UTC.
+
+    fromisoformat() returns a *naive* datetime for that, and calling
+    .timestamp() on a naive datetime makes Python interpret it in the
+    server's local timezone. On Render that happens to be UTC so the bug
+    would be invisible there, while a developer in UTC+5:45 would see every
+    satellite displaced by nearly three degrees of arc. Hence the explicit
+    replace(): converted once here so the app never has to parse 12,000
+    timestamps or know about this.
+
+    Returns None if the string is malformed, so the caller can skip the
+    record rather than serving a broken one.
+    """
+    try:
+        return (
+            datetime.fromisoformat(epoch_str)
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _trim_element_set(sat):
+    """
+    Reduce one CelesTrak OMM record to just what a propagator needs.
+
+    Short keys and 6-decimal rounding are purely about size: multiplied by
+    12,000 records, full OMM field names alone cost more than the numbers
+    they label. Returns None if any required element is absent or unparseable.
+    """
+    if any(sat.get(k) is None for k in _REQUIRED_ELEMENTS):
+        return None
+
+    epoch = _epoch_to_unix(sat.get("EPOCH"))
+    if epoch is None:
+        return None
+
+    try:
+        mean_motion = float(sat["MEAN_MOTION"])
+        if mean_motion <= 0:
+            return None
+        return {
+            "id": int(sat.get("NORAD_CAT_ID") or 0),
+            "name": (sat.get("OBJECT_NAME") or "Unknown").strip(),
+            "grp": sat.get("_group") or "",
+            # Classified server-side with the same function the SATELLITES
+            # and SPACECRAFT HEALTH sections use, so the app can colour by
+            # orbit regime without a second, drifting set of thresholds.
+            "cls": classify_orbit_type(mean_motion=mean_motion),
+            "ep": round(epoch, 1),
+            "mm": round(mean_motion, 8),
+            "ecc": round(float(sat["ECCENTRICITY"]), 8),
+            "inc": round(float(sat["INCLINATION"]), 6),
+            "raan": round(float(sat["RA_OF_ASC_NODE"]), 6),
+            "argp": round(float(sat["ARG_OF_PERICENTER"]), 6),
+            "ma": round(float(sat["MEAN_ANOMALY"]), 6),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+@app.get("/satellites/elements")
+def get_satellite_elements(group: str | None = None):
+    """
+    Orbital element sets for the tracked catalog, for the app's 3D globe.
+
+    This serves data the repo has always had but never exposed. The 6-hourly
+    GitHub Action fetches CelesTrak in OMM format and commits it whole, so
+    satellite_cache.json already holds the complete element set for ~12,000
+    objects; the briefing sections only ever read three of those fields.
+
+    Positions are deliberately NOT computed here. The app propagates on
+    device, which keeps the globe moving in real time without a request per
+    frame, works with no network once the elements are cached, and means this
+    endpoint stays a cheap static read instead of a per-viewer computation.
+
+    Pass ?group=<celestrak group> (e.g. "starlink", "stations") to filter.
+    That's a convenience for other callers — the app downloads everything
+    once and filters on device so its chips respond instantly.
+
+    Returns:
+        cached_at: when the snapshot was taken, or null if served live
+        source:    "live" | "cached"
+        count:     element sets returned
+        skipped:   records dropped for incomplete elements (expected: 0)
+    """
+    now = time.time()
+    cached = _elements_cache["payload"]
+    if cached is None or (now - _elements_cache["timestamp"]) >= _ELEMENTS_TTL:
+        satellites, status, cached_at = fetch_satellites_with_status(group="active")
+
+        if status == "unavailable":
+            raise HTTPException(
+                status_code=503,
+                detail="Satellite catalog unavailable — CelesTrak could not be "
+                       "reached and no cached snapshot exists yet.",
+            )
+
+        trimmed = []
+        skipped = 0
+        for sat in satellites:
+            element_set = _trim_element_set(sat)
+            if element_set is None:
+                skipped += 1
+            else:
+                trimmed.append(element_set)
+
+        if skipped:
+            print(f"[main] /satellites/elements skipped {skipped} of "
+                  f"{len(satellites)} records for incomplete elements",
+                  flush=True)
+
+        cached = {
+            "cached_at": cached_at,
+            "source": status,
+            "count": len(trimmed),
+            "skipped": skipped,
+            "satellites": trimmed,
+        }
+        _elements_cache["payload"] = cached
+        _elements_cache["timestamp"] = now
+
+    if group:
+        wanted = group.lower()
+        subset = [s for s in cached["satellites"] if s["grp"] == wanted]
+        return {**cached, "count": len(subset), "satellites": subset}
+
+    return cached
 
 
 if __name__ == "__main__":
