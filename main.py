@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from briefing import generate_briefing
 from ask import ask as ask_flight_director
 from translate import translate_text
+from iss_passes import fetch_iss_passes
 
 app = FastAPI(
     title="Orbital Brief API",
@@ -79,7 +80,10 @@ def root():
     return {
         "service": "Orbital Brief API",
         "status": "online",
-        "endpoints": ["/briefing", "/ask", "/history/dates", "/history/{date}"],
+        "endpoints": [
+            "/briefing", "/ask", "/history/dates",
+            "/history/{date}", "/iss-passes",
+        ],
     }
 
 
@@ -193,6 +197,17 @@ def get_history_briefing(date_str: str):
         data = json.load(f)
 
     return BriefingResponse(date=data["date"], briefing=data["briefing"], cached=True)
+
+
+@app.get("/iss-passes")
+def get_iss_passes(lat: float, lon: float):
+    """
+    Returns upcoming visually-observable ISS passes for the given
+    location. Live request to N2YO on every call (can't be pre-cached
+    like the satellite catalog, since it depends on the requester's
+    real-time position).
+    """
+    return fetch_iss_passes(lat, lon)
 
 
 if __name__ == "__main__":
