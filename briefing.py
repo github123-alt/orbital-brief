@@ -37,6 +37,7 @@ from significance import (
 )
 from mission_planner import assess_mission_windows, format_mission_windows
 from spacecraft_health import score_spacecraft, format_spacecraft_health
+from starlink import assess_starlink_fleet, format_starlink_fleet
 from watsonx import generate_narrative
 
 
@@ -129,8 +130,28 @@ def build_eonet_section():
     return f"EARTH EVENTS (from orbit): {summary}"
 
 
-def build_satellite_section():
+def fetch_catalog():
+    """
+    Fetch the satellite catalog once, for the sections that need it.
+
+    Both SATELLITES and STARLINK are built from the same element sets, and
+    each fetch is nine CelesTrak groups in parallel (or, in production, a
+    read of the whole cached snapshot). Fetching per-section would double
+    that for no new information. Returns (active, status, cached_at, decayed);
+    decayed is empty when the catalog itself is unavailable, since there is
+    nothing to compare it against.
+
+    Not memoised on purpose — the API layer supports force_refresh, and a
+    module-level cache in a long-running server process would pin the
+    catalog until restart.
+    """
     active, status, cached_at = fetch_satellites_with_status(group="active")
+    decayed = [] if status == "unavailable" else fetch_decayed_satellites()
+    return active, status, cached_at, decayed
+
+
+def build_satellite_section(catalog=None):
+    active, status, cached_at, decayed = catalog if catalog is not None else fetch_catalog()
 
     if status == "unavailable":
         return (
@@ -139,7 +160,6 @@ def build_satellite_section():
             "snapshot is available yet. Other sections are unaffected."
         )
 
-    decayed = fetch_decayed_satellites()
     result = summarize_satellite_catalog(active, decayed, classify_orbit_type)
 
     lines = [f"SATELLITES: {result['summary']}"]
@@ -162,6 +182,33 @@ def build_satellite_section():
         lines.append(f"  Recently re-entered: {names}")
 
     return "\n".join(lines)
+
+
+def build_starlink_section(catalog=None):
+    """
+    Summarise the Starlink constellation out of the catalog already fetched
+    for the SATELLITES section. See starlink.py for why this deliberately
+    makes no request of its own.
+    """
+    active, status, cached_at, decayed = catalog if catalog is not None else fetch_catalog()
+
+    if status == "unavailable":
+        return (
+            "STARLINK CONSTELLATION: Unavailable — the satellite catalog "
+            "this is derived from could not be reached. See the SATELLITES "
+            "section."
+        )
+
+    assessment = assess_starlink_fleet(active, decayed)
+    section = format_starlink_fleet(assessment)
+
+    if status == "cached":
+        # Appended rather than inserted after the title: the title line is
+        # what the app splits sections on, so anything unindented below it
+        # would start a new tile.
+        section += f"\n  (Live catalog unreachable — showing cached data from {cached_at})"
+
+    return section
 
 
 def build_mission_window_section():
@@ -276,13 +323,18 @@ def build_alert_banner(alerts: list) -> str:
 def generate_briefing():
     today = date.today().isoformat()
 
+    # Shared by the SATELLITES and STARLINK sections, which are two views of
+    # the same element sets. Fetched here so it happens once.
+    catalog = fetch_catalog()
+
     # Build each data section independently
     section_map = {
         "solar_flares":     build_flare_section(),
         "geomagnetic":      build_geomagnetic_section(),
         "neo":              build_neo_section(),
         "earth_events":     build_eonet_section(),
-        "satellites":       build_satellite_section(),
+        "satellites":       build_satellite_section(catalog),
+        "starlink":         build_starlink_section(catalog),
         "deep_space":       build_deep_space_section(),
         "lunar_debris":     build_lunar_debris_section(),
         "mission_windows":  build_mission_window_section(),
@@ -313,6 +365,8 @@ def generate_briefing():
         section_map["earth_events"],
         "",
         section_map["satellites"],
+        "",
+        section_map["starlink"],
         "",
         section_map["spacecraft_health"],
         "",

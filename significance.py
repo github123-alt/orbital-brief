@@ -459,6 +459,12 @@ def get_lunar_debris_summary() -> dict:
 # Anomaly & Alert Detection
 # ---------------------------------------------------------------------------
 
+# Re-entries in the last 30 days above which debris activity is called out.
+# Kept at the value the code has always used; the docstring below previously
+# said 50, which was never what ran.
+REENTRY_ALERT_THRESHOLD = 100
+
+
 def detect_alerts(section_map: dict) -> list:
     """
     Scan all briefing sections for conditions that cross operational thresholds
@@ -472,7 +478,7 @@ def detect_alerts(section_map: dict) -> list:
       - Geomagnetic  >= G3       (Kp >= 7 — satellite charging risk)
       - NEO          <= 5 LD     (very close approach)
       - NEO          is PHA range AND very close
-      - Satellites   >= 50 re-entries in last 30 days (unusual debris activity)
+      - Satellites   >= REENTRY_ALERT_THRESHOLD re-entries in last 30 days
 
     Args:
         section_map (dict): the same dict passed to generate_briefing() —
@@ -511,15 +517,25 @@ def detect_alerts(section_map: dict) -> list:
         alerts.append("Very close asteroid approach (1–5 lunar distances) — within enhanced monitoring range")
 
     # ── Satellite re-entry rate ────────────────────────────────────────────
+    # Anchored to the phrasing summarize_satellite_catalog() produces, rather
+    # than scanning for the first large number in the section. That scan
+    # matched the *active satellite count* — the first number in the same
+    # sentence — so every briefing carried a false alert claiming that all
+    # ~12,000 tracked satellites had re-entered in the last 30 days. It never
+    # cleared, which meant the status banner never showed ALL CLEAR, the home
+    # screen widget's dot was permanently amber, and the AI narrative was
+    # briefed on a debris emergency that was not happening.
     sat_text = section_map.get("satellites", "")
-    for word in sat_text.split():
-        try:
-            count = int(word.replace(",", ""))
-            if count >= 100:
-                alerts.append(f"{count} objects re-entered atmosphere in last 30 days — elevated debris activity; check collision avoidance for LEO assets")
-                break
-        except ValueError:
-            continue
+    reentry = re.search(
+        r"([\d,]+)\s+object\(s\)\s+recently\s+re-entered", sat_text
+    )
+    if reentry:
+        count = int(reentry.group(1).replace(",", ""))
+        if count >= REENTRY_ALERT_THRESHOLD:
+            alerts.append(
+                f"{count} objects re-entered atmosphere in last 30 days — "
+                "elevated debris activity; check collision avoidance for LEO assets"
+            )
 
     return alerts
 
