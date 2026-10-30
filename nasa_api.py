@@ -85,9 +85,32 @@ def fetch_solar_flares(days_back=7):
         "endDate": end_date.isoformat(),
         "api_key": NASA_API_KEY
     }
-    response = requests.get(url, params=params, timeout=15)
-    response.raise_for_status()
-    return response.json()
+
+    try:
+        response = requests.get(url, params=params, timeout=15)
+
+        # Check if HTTP status is OK (raises error for 4xx/5xx)
+        response.raise_for_status()
+
+        # Check if the response body is empty
+        if not response.text or not response.text.strip():
+            print("Warning: NASA solar flare API returned an empty response.")
+            return []
+
+        return response.json()
+
+    except requests.exceptions.HTTPError as e:
+        print(f"Warning: NASA solar flare API HTTP error: {e} (Status: {response.status_code})")
+        return []
+    except requests.exceptions.Timeout:
+        print("Warning: NASA solar flare API request timed out.")
+        return []
+    except requests.exceptions.JSONDecodeError:
+        print(f"Error: Failed to parse JSON from NASA flare API. Response text was: {response.text[:200]}")
+        return []
+    except Exception as e:
+        print(f"An unexpected error occurred while fetching solar flares: {e}")
+        return []
 
 
 def fetch_geomagnetic_storms(days_back=7):
