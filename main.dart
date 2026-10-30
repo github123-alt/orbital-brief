@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// TODO: put your Render URL here (no trailing slash), e.g.
 /// 'https://orbital-brief.onrender.com'
-const String kApiBase = 'https://orbital-brief.onrender.com';
+const String kApiBase = 'https://YOUR-SERVICE.onrender.com';
 
 const String _kCacheKey = 'briefing_cache_v1';
 
