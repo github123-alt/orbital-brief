@@ -7,6 +7,12 @@ grounded in real NOAA/NASA operational thresholds, topped with an
 AI-generated narrative from IBM watsonx.ai (Granite), anomaly alerts,
 mission window assessments, and spacecraft health forecasts.
 
+Resilience: every section is built inside safe_section(), so one failing
+upstream API produces a one-line "Data temporarily unavailable" placeholder
+for that section instead of crashing the whole briefing. DONKI and NeoWs data
+is fetched ONCE per briefing and shared between sections, so an outage costs
+one retry cycle, not three.
+
 Usage:
     python briefing.py
 """
@@ -41,8 +47,109 @@ from starlink import assess_starlink_fleet, format_starlink_fleet
 from watsonx import generate_narrative
 
 
-def build_flare_section():
-    flares = fetch_solar_flares(days_back=7)
+# ---------------------------------------------------------------------------
+# Failure handling helpers
+# ---------------------------------------------------------------------------
+
+# fetch_solar_flares() returns a simulated placeholder flare when DONKI is
+# down, so the app keeps running. It must never be presented (or archived) as
+# a real observation, so it is detected by ID prefix and treated as "no data".
+FALLBACK_FLARE_PREFIX = "FALLBACK-SIMULATED"
+
+UNAVAILABLE_SUFFIX = "Data temporarily unavailable."
+
+
+def safe_section(builder, title, *args):
+    """
+    Run a section builder; if it raises, return a one-line placeholder in the
+    same 'TITLE: text' format so the rest of the briefing still renders.
+
+    Only the exception TYPE is logged, never its message: `requests` puts the
+    full request URL (including API keys) into its exception text.
+    """
+    try:
+        return builder(*args)
+    except Exception as e:
+        print(f"[briefing] {title} section failed: {type(e).__name__}", flush=True)
+        return f"{title}: {UNAVAILABLE_SUFFIX}"
+
+
+def safe_fetch(fetcher, label, *args, **kwargs):
+    """
+    Run a data fetcher; return [] on any failure so downstream code can treat
+    'no data' uniformly. Logs the exception type only (see safe_section).
+    """
+    try:
+        result = fetcher(*args, **kwargs)
+        return result if result is not None else []
+    except Exception as e:
+        print(f"[briefing] {label} fetch failed: {type(e).__name__}", flush=True)
+        return []
+
+
+def _split_fallback_flares(flares):
+    """
+    Separate real flares from the simulated outage placeholder.
+    Returns (real_flares, used_fallback: bool).
+    """
+    real = [f for f in flares if not str(f.get("flrID", "")).startswith(FALLBACK_FLARE_PREFIX)]
+    return real, len(real) != len(flares)
+
+
+# ---------------------------------------------------------------------------
+# Shared metric helpers (previously duplicated in two builders)
+# ---------------------------------------------------------------------------
+
+_FLARE_LETTER_RANK = {"A": 0, "B": 0, "C": 1, "M": 2, "X": 3}
+
+
+def _flare_sort_key(class_type):
+    """Sort key for a flare class string like 'M5.2'; tolerant of bad input."""
+    class_type = (class_type or "C0").strip() or "C0"
+    letter = _FLARE_LETTER_RANK.get(class_type[0].upper(), 0)
+    try:
+        magnitude = float(class_type[1:] or 0)
+    except ValueError:
+        magnitude = 0.0
+    return (letter, magnitude)
+
+
+def _worst_flare_class(flares):
+    """Strongest flare class among real flares, or 'C0' (benign) if none."""
+    if not flares:
+        return "C0"
+    return max(
+        (f.get("classType") or "C0" for f in flares),
+        key=_flare_sort_key,
+    )
+
+
+def _peak_kp(storms):
+    """Highest Kp index across all storms; 0.0 if none or unparseable."""
+    peak = 0.0
+    for storm in storms or []:
+        for entry in storm.get("allKpIndex", []):
+            try:
+                peak = max(peak, float(entry.get("kpIndex", 0)))
+            except (TypeError, ValueError):
+                continue
+    return peak
+
+
+# ---------------------------------------------------------------------------
+# Section builders
+# Each accepts optional pre-fetched data so generate_briefing() can fetch once
+# and share. Called with no arguments (e.g. from other modules), they fetch
+# for themselves exactly as before.
+# ---------------------------------------------------------------------------
+
+def build_flare_section(flares=None):
+    if flares is None:
+        flares = fetch_solar_flares(days_back=7)
+
+    flares, used_fallback = _split_fallback_flares(flares)
+    if used_fallback:
+        return "SOLAR FLARES: " + UNAVAILABLE_SUFFIX + " NASA DONKI could not be reached."
     if not flares:
         return "SOLAR FLARES: No significant solar flares recorded in the past 7 days. Conditions quiet."
 
@@ -69,8 +176,9 @@ def build_flare_section():
     return "\n".join(lines)
 
 
-def build_geomagnetic_section():
-    storms = fetch_geomagnetic_storms(days_back=7)
+def build_geomagnetic_section(storms=None):
+    if storms is None:
+        storms = fetch_geomagnetic_storms(days_back=7)
     if not storms:
         return "GEOMAGNETIC ACTIVITY: No geomagnetic storms recorded in the past 7 days. Conditions quiet."
 
@@ -87,8 +195,9 @@ def build_geomagnetic_section():
     return "\n".join(lines)
 
 
-def build_neo_section():
-    neos = fetch_near_earth_objects(days_forward=7)
+def build_neo_section(neos=None):
+    if neos is None:
+        neos = fetch_near_earth_objects(days_forward=7)
     if not neos:
         return "NEAR-EARTH OBJECTS: No close approaches recorded for the coming week."
 
@@ -102,7 +211,10 @@ def build_neo_section():
         approaches = neo.get("close_approach_data", [])
         if not approaches:
             continue
-        miss_km = float(approaches[0]["miss_distance"]["kilometers"])
+        try:
+            miss_km = float(approaches[0]["miss_distance"]["kilometers"])
+        except (KeyError, TypeError, ValueError):
+            continue
         diameter_est = neo.get("estimated_diameter", {}).get("meters", {})
         diameter_avg = None
         if diameter_est:
@@ -243,69 +355,53 @@ def build_starlink_section(catalog=None):
     return section
 
 
-def build_mission_window_section():
+def build_mission_window_section(flares=None, storms=None, neos=None):
     """
     Extract the worst flare and peak Kp from the current data and assess
     mission windows. Worst-case flare defaults to 'C0' (benign) if none recorded.
     """
-    flares = fetch_solar_flares(days_back=7)
-    storms = fetch_geomagnetic_storms(days_back=7)
-    neos   = fetch_near_earth_objects(days_forward=7)
+    if flares is None:
+        flares = fetch_solar_flares(days_back=7)
+    if storms is None:
+        storms = fetch_geomagnetic_storms(days_back=7)
+    if neos is None:
+        neos = fetch_near_earth_objects(days_forward=7)
 
-    # Determine worst flare class
-    worst_flare = "C0"
-    if flares:
-        rank = {"A": 0, "B": 0, "C": 1, "M": 2, "X": 3}
-        worst_flare = max(
-            (f.get("classType", "C0") for f in flares),
-            key=lambda c: (rank.get(c[0].upper(), 0), float(c[1:] or 0))
-        )
-
-    # Determine peak Kp
-    peak_kp = 0.0
-    for storm in storms:
-        for entry in storm.get("allKpIndex", []):
-            peak_kp = max(peak_kp, float(entry.get("kpIndex", 0)))
+    flares, _ = _split_fallback_flares(flares)
+    worst_flare = _worst_flare_class(flares)
+    peak_kp = _peak_kp(storms)
 
     # Determine closest NEO tier
     neo_tier = "Routine"
-    if neos:
-        from significance import classify_close_approach
-        best_ld = float("inf")
-        for neo in neos:
-            approaches = neo.get("close_approach_data", [])
-            if approaches:
-                km = float(approaches[0]["miss_distance"]["kilometers"])
-                r  = classify_close_approach(km)
-                if r["distance_ld"] < best_ld:
-                    best_ld  = r["distance_ld"]
-                    neo_tier = r["tier"]
+    best_ld = float("inf")
+    for neo in neos or []:
+        approaches = neo.get("close_approach_data", [])
+        if not approaches:
+            continue
+        try:
+            km = float(approaches[0]["miss_distance"]["kilometers"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        r = classify_close_approach(km)
+        if r["distance_ld"] < best_ld:
+            best_ld = r["distance_ld"]
+            neo_tier = r["tier"]
 
     windows = assess_mission_windows(worst_flare, peak_kp, neo_tier)
     return format_mission_windows(windows)
 
 
-def build_spacecraft_health_section():
+def build_spacecraft_health_section(flares=None, storms=None):
     """
     Compute spacecraft risk scores from current worst-case flare and peak Kp.
     """
-    flares = fetch_solar_flares(days_back=7)
-    storms = fetch_geomagnetic_storms(days_back=7)
+    if flares is None:
+        flares = fetch_solar_flares(days_back=7)
+    if storms is None:
+        storms = fetch_geomagnetic_storms(days_back=7)
 
-    worst_flare = "C0"
-    if flares:
-        rank = {"A": 0, "B": 0, "C": 1, "M": 2, "X": 3}
-        worst_flare = max(
-            (f.get("classType", "C0") for f in flares),
-            key=lambda c: (rank.get(c[0].upper(), 0), float(c[1:] or 0))
-        )
-
-    peak_kp = 0.0
-    for storm in storms:
-        for entry in storm.get("allKpIndex", []):
-            peak_kp = max(peak_kp, float(entry.get("kpIndex", 0)))
-
-    scores = score_spacecraft(worst_flare, peak_kp)
+    flares, _ = _split_fallback_flares(flares)
+    scores = score_spacecraft(_worst_flare_class(flares), _peak_kp(storms))
     return format_spacecraft_health(scores)
 
 
@@ -335,14 +431,10 @@ def build_lunar_debris_section():
     return "\n".join(lines)
 
 
-def main():
-    print(generate_briefing())
-
-
 def build_alert_banner(alerts: list) -> str:
     """
     Format active alerts into a prominent banner for the top of the briefing.
-    Returns an empty string if there are no alerts (all-clear conditions).
+    Returns an all-clear line if there are no alerts.
     """
     if not alerts:
         return "OPERATIONAL STATUS: ✅ ALL CLEAR — No threshold-crossing conditions detected."
@@ -357,28 +449,47 @@ def generate_briefing():
 
     # Shared by the SATELLITES and STARLINK sections, which are two views of
     # the same element sets. Fetched here so it happens once.
-    catalog = fetch_catalog()
+    try:
+        catalog = fetch_catalog()
+    except Exception as e:
+        print(f"[briefing] catalog fetch failed: {type(e).__name__}", flush=True)
+        catalog = ([], "unavailable", None, [])
 
-    # Build each data section independently
+    # DONKI and NeoWs data feeds several sections (flares/storms/NEOs are each
+    # used by 2-3 builders). Fetched once here so an outage costs one retry
+    # cycle instead of one per section. A failed fetch yields [] ("no data").
+    flares = safe_fetch(fetch_solar_flares, "solar flare", days_back=7)
+    storms = safe_fetch(fetch_geomagnetic_storms, "geomagnetic", days_back=7)
+    neos = safe_fetch(fetch_near_earth_objects, "NEO", days_forward=7)
+
+    # Build each data section independently; one failure can't sink the rest.
     section_map = {
-        "solar_flares":     build_flare_section(),
-        "geomagnetic":      build_geomagnetic_section(),
-        "neo":              build_neo_section(),
-        "earth_events":     build_eonet_section(),
-        "satellites":       build_satellite_section(catalog),
-        "starlink":         build_starlink_section(catalog),
-        "deep_space":       build_deep_space_section(),
-        "lunar_debris":     build_lunar_debris_section(),
-        "mission_windows":  build_mission_window_section(),
-        "spacecraft_health":build_spacecraft_health_section(),
+        "solar_flares":      safe_section(build_flare_section, "SOLAR FLARES", flares),
+        "geomagnetic":       safe_section(build_geomagnetic_section, "GEOMAGNETIC ACTIVITY", storms),
+        "neo":               safe_section(build_neo_section, "NEAR-EARTH OBJECTS", neos),
+        "earth_events":      safe_section(build_eonet_section, "EARTH EVENTS"),
+        "satellites":        safe_section(build_satellite_section, "SATELLITES", catalog),
+        "starlink":          safe_section(build_starlink_section, "STARLINK CONSTELLATION", catalog),
+        "deep_space":        safe_section(build_deep_space_section, "DEEP SPACE OBJECTS"),
+        "lunar_debris":      safe_section(build_lunar_debris_section, "LUNAR DEBRIS INVENTORY"),
+        "mission_windows":   safe_section(build_mission_window_section, "MISSION WINDOWS", flares, storms, neos),
+        "spacecraft_health": safe_section(build_spacecraft_health_section, "SPACECRAFT HEALTH", flares, storms),
     }
 
     # Detect threshold-crossing conditions
-    alerts = detect_alerts(section_map)
+    try:
+        alerts = detect_alerts(section_map)
+    except Exception as e:
+        print(f"[briefing] alert detection failed: {type(e).__name__}", flush=True)
+        alerts = []
     alert_banner = build_alert_banner(alerts)
 
     # Ask IBM Granite to narrate the day's conditions with alert context
-    ai_narrative = generate_narrative(section_map, active_alerts=alerts)
+    try:
+        ai_narrative = generate_narrative(section_map, active_alerts=alerts)
+    except Exception as e:
+        print(f"[briefing] narrative failed: {type(e).__name__}", flush=True)
+        ai_narrative = "AI NARRATIVE: Unavailable today. See detailed data below."
 
     sections = [
         f"=== DAILY SPACE OPERATIONS BRIEFING — {today} ===\n",
@@ -409,6 +520,10 @@ def generate_briefing():
         section_map["lunar_debris"],
     ]
     return "\n".join(sections)
+
+
+def main():
+    print(generate_briefing())
 
 
 if __name__ == "__main__":

@@ -115,15 +115,17 @@ def fetch_solar_flares(days_back=7):
         }
     ]
 
-def fetch_geomagnetic_storms(days_back=7):
+def fetch_geomagnetic_storms(days_back=7, max_retries=3):
     """
     Fetch recent geomagnetic storm events from DONKI.
 
     Args:
         days_back (int): how many days back to look
+        max_retries (int): number of attempts before giving up
 
     Returns:
         list of dicts, each with 'gstID', 'startTime', 'allKpIndex', etc.
+        Returns an empty list if the API is unavailable.
     """
     end_date = date.today()
     start_date = end_date - timedelta(days=days_back)
@@ -134,40 +136,76 @@ def fetch_geomagnetic_storms(days_back=7):
         "endDate": end_date.isoformat(),
         "api_key": NASA_API_KEY
     }
-    response = requests.get(url, params=params, timeout=15)
-    response.raise_for_status()
-    return response.json()
 
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            return data if isinstance(data, list) else []
+        except (requests.exceptions.RequestException, ValueError) as e:
+            print(f"[nasa_api] GST attempt {attempt}/{max_retries} failed: {e}")
+            if attempt < max_retries:
+                time.sleep(2 * attempt)
+
+    print("Warning: NASA DONKI GST API is unavailable. Returning no storm data.")
+    return []
+
+
+def _get_json_with_retries(url, params, label, max_retries=3, timeout=15):
+    """GET a JSON endpoint with retries. Returns parsed JSON, or None on failure."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except (requests.exceptions.RequestException, ValueError) as e:
+            print(f"[nasa_api] {label} attempt {attempt}/{max_retries} failed: "
+                  f"{type(e).__name__}", flush=True)
+            if attempt < max_retries:
+                time.sleep(2 * attempt)
+    print(f"Warning: {label} unavailable. Returning no data.", flush=True)
+    return None
 
 def fetch_near_earth_objects(days_forward=7):
     """
     Fetch near-Earth object close-approach data from NeoWs.
-
-    Args:
-        days_forward (int): how many days ahead to look (max 7 per NASA API limits)
-
-    Returns:
-        list of dicts, each representing one asteroid with close-approach info
+    Returns an empty list if the API is unavailable.
     """
     start_date = date.today()
     end_date = start_date + timedelta(days=min(days_forward, 7))
 
-    url = f"{BASE_URL}/neo/rest/v1/feed"
-    params = {
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "api_key": NASA_API_KEY
-    }
-    response = requests.get(url, params=params, timeout=15)
-    response.raise_for_status()
-    data = response.json()
+    data = _get_json_with_retries(
+        f"{BASE_URL}/neo/rest/v1/feed",
+        {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "api_key": NASA_API_KEY,
+        },
+        "NeoWs",
+    )
+    if not isinstance(data, dict):
+        return []
 
-    # Flatten the date-keyed structure into a simple list
     objects = []
-    for date_key, neos in data.get("near_earth_objects", {}).items():
-        for neo in neos:
-            objects.append(neo)
+    for neos in data.get("near_earth_objects", {}).values():
+        objects.extend(neos)
     return objects
+
+
+def fetch_eonet_events(days_back=7, status="open"):
+    """
+    Fetch recent Earth natural events from EONET.
+    Returns an empty list if the API is unavailable.
+    """
+    data = _get_json_with_retries(
+        f"{EONET_URL}/events",
+        {"status": status, "days": days_back},
+        "EONET",
+    )
+    if not isinstance(data, dict):
+        return []
+    return data.get("events", [])
 
 
 def fetch_eonet_events(days_back=7, status="open"):
